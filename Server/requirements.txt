@@ -1,0 +1,16 @@
+fastapi
+uvicorn
+requests
+supabase
+python-dotenv
+python-multipart
+langchain
+langchain-groq
+langchain-core
+langchain-community
+pandas
+openpyxl
+reportlab
+python-docx
+duckduckgo-search
+wikipedia

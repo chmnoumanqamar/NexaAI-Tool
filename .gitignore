@@ -1,0 +1,101 @@
+# ==========================================
+# NexaAI Tool - Git Ignore Configuration
+# ==========================================
+
+# Dependencies (Node / JS)
+node_modules/
+*/node_modules/
+.pnp
+.pnp.js
+.yarn/cache
+.yarn/unplugged
+
+# Production & Build outputs (Next.js / Frontend)
+.next/
+*/.next/
+out/
+build/
+dist/
+.turbo/
+
+# Python Cache & Bytecode
+__pycache__/
+*/__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+*.egg
+*.egg-info/
+eggs/
+parts/
+var/
+sdist/
+develop-eggs/
+.installed.cfg
+lib/
+lib64/
+
+# Python Virtual Environments
+venv/
+.venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+*/venv/
+*/.venv/
+*/env/
+
+# Environment Variables & Secrets
+.env
+.env*.local
+.env.development
+.env.production
+.env.test
+Server/.env
+Client/.env
+Client/.env*.local
+!*.example
+!.env.example
+!Server/.env.example
+
+# Temporary Uploads & User Data
+Server/secure_uploads/*
+!Server/secure_uploads/.gitkeep
+
+# Logs
+logs/
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+lerna-debug.log*
+
+# Editor & IDE settings
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+.idea/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.sw?
+*.bak
+
+# Operating System Files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+desktop.ini
+
+# Testing & Coverage
+coverage/
+*.lcov
+.nyc_output/
