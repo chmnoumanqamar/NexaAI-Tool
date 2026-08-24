@@ -153,6 +153,214 @@ function parseWorkspaceInput(raw) {
   return trimmed.replace(/\s+/g, "");
 }
 
+// ---- Lightweight, Safe Markdown & List Renderer ----
+function renderFormattedMarkdown(text) {
+  if (!text) return null;
+  const lines = text.split("\n");
+  const elements = [];
+  let inCodeBlock = false;
+  let codeBlockLines = [];
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (line.trim().startsWith("```")) {
+      if (inCodeBlock) {
+        elements.push(
+          <pre key={`code-${i}`} className="msg-code-block">
+            <code>{codeBlockLines.join("\n")}</code>
+          </pre>
+        );
+        codeBlockLines = [];
+        inCodeBlock = false;
+      } else {
+        inCodeBlock = true;
+        codeBlockLines = [];
+      }
+      continue;
+    }
+
+    if (inCodeBlock) {
+      codeBlockLines.push(line);
+      continue;
+    }
+
+    if (!line.trim()) {
+      elements.push(<div key={`blank-${i}`} style={{ height: 6 }} />);
+      continue;
+    }
+
+    // Bold, inline code, and bullet points parser
+    let processedLine = line;
+    const isBullet = /^\s*([•\-\*]|\d+\.)\s+/.test(processedLine);
+    const isHeading = /^\s*#{1,4}\s+/.test(processedLine);
+    let contentToFormat = processedLine;
+    if (isBullet) {
+      contentToFormat = processedLine.replace(/^\s*([•\-\*]|\d+\.)\s+/, "");
+    } else if (isHeading) {
+      contentToFormat = processedLine.replace(/^\s*#{1,4}\s+/, "");
+    }
+
+    // Helper to format inline tags (**bold**, `code`)
+    const parts = [];
+    let remaining = contentToFormat;
+    let partKey = 0;
+
+    while (remaining) {
+      const boldMatch = remaining.match(/\*\*(.*?)\*\*/);
+      const codeMatch = remaining.match(/`(.*?)`/);
+
+      let firstMatch = null;
+      let matchType = null;
+
+      if (boldMatch && (!codeMatch || boldMatch.index < codeMatch.index)) {
+        firstMatch = boldMatch;
+        matchType = "bold";
+      } else if (codeMatch) {
+        firstMatch = codeMatch;
+        matchType = "code";
+      }
+
+      if (firstMatch) {
+        const before = remaining.slice(0, firstMatch.index);
+        if (before) parts.push(<span key={partKey++}>{before}</span>);
+        if (matchType === "bold") {
+          parts.push(<strong key={partKey++}>{firstMatch[1]}</strong>);
+        } else {
+          parts.push(<span key={partKey++} className="msg-inline-code">{firstMatch[1]}</span>);
+        }
+        remaining = remaining.slice(firstMatch.index + firstMatch[0].length);
+      } else {
+        parts.push(<span key={partKey++}>{remaining}</span>);
+        remaining = "";
+      }
+    }
+
+    if (isHeading) {
+      elements.push(
+        <div key={`h-${i}`} style={{ fontWeight: 800, fontSize: 15, margin: "6px 0 2px" }}>
+          {parts}
+        </div>
+      );
+    } else if (isBullet) {
+      elements.push(
+        <div key={`bullet-${i}`} style={{ display: "flex", gap: 6, margin: "3px 0", paddingLeft: 4 }}>
+          <span style={{ opacity: 0.75, flexShrink: 0 }}>•</span>
+          <span style={{ flex: 1 }}>{parts}</span>
+        </div>
+      );
+    } else {
+      elements.push(
+        <p key={`p-${i}`} style={{ margin: "3px 0" }}>
+          {parts}
+        </p>
+      );
+    }
+  }
+
+  if (inCodeBlock && codeBlockLines.length > 0) {
+    elements.push(
+      <pre key="code-end" className="msg-code-block">
+        <code>{codeBlockLines.join("\n")}</code>
+      </pre>
+    );
+  }
+
+  return elements;
+}
+
+// ---- Rich Message Component with Auto-Detected File Download Cards ----
+function MessageContent({ content, isUser, onCopy }) {
+  if (!content) return null;
+
+  // 1. Handle user uploaded file tag: [File Uploaded: test.png]
+  let displayContent = content;
+  let userUploadedFilename = null;
+  if (isUser && displayContent.includes("[File Uploaded:")) {
+    const uploadMatch = displayContent.match(/\[File Uploaded:\s*([^\]]+)\]/i);
+    if (uploadMatch) {
+      userUploadedFilename = uploadMatch[1].trim();
+      displayContent = displayContent.replace(/\[File Uploaded:\s*[^\]]+\]/i, "").trim();
+    }
+  }
+
+  // 2. Extract download links (http://localhost:8000/api/download/filename.ext or /api/download/filename.ext)
+  const downloadLinkMatches = [];
+  const linkRegex = /(?:https?:\/\/[^\s\/]+)?\/api\/download\/([a-zA-Z0-9_\-\.\%]+)/gi;
+  let match;
+  while ((match = linkRegex.exec(displayContent)) !== null) {
+    const rawFilename = match[1];
+    const cleanFilename = decodeURIComponent(rawFilename);
+    const downloadUrl = `http://localhost:8000/api/download/${rawFilename}`;
+    if (!downloadLinkMatches.some((d) => d.filename === cleanFilename)) {
+      downloadLinkMatches.push({
+        filename: cleanFilename,
+        downloadUrl,
+      });
+    }
+  }
+
+  // 3. Clean raw URL string and "Download Link:" prefix from the body text
+  let textBody = displayContent;
+  if (downloadLinkMatches.length > 0) {
+    textBody = textBody
+      .replace(/(?:https?:\/\/[^\s\/]+)?\/api\/download\/[a-zA-Z0-9_\-\.\%]+/gi, "")
+      .replace(/Download Link:?\s*/gi, "")
+      .replace(/Download link:?\s*/gi, "")
+      .replace(/✅\s*([A-Za-z0-9\s]+)\s*successfully generated!?/gi, "")
+      .trim();
+  }
+
+  return (
+    <div className="msg-markdown">
+      {userUploadedFilename && (
+        <div className="user-upload-tag">
+          📎 <span>{userUploadedFilename}</span>
+        </div>
+      )}
+
+      {textBody && <div>{renderFormattedMarkdown(textBody)}</div>}
+
+      {downloadLinkMatches.map((f, idx) => {
+        const meta = fileMeta(f.filename);
+        return (
+          <div key={`dl-${idx}`} className="download-card">
+            <div className="download-card-header">
+              <div className="download-card-icon">{meta.icon}</div>
+              <div className="download-card-details">
+                <div className="download-card-title">{f.filename}</div>
+                <div className="download-card-badge">
+                  <span>✓ {meta.label} Document</span>
+                  <span style={{ opacity: 0.5 }}>•</span>
+                  <span>Ready to Download</span>
+                </div>
+              </div>
+            </div>
+            <div className="download-card-actions">
+              <a
+                href={f.downloadUrl}
+                download={f.filename}
+                className="download-btn-primary"
+                title={`Download ${f.filename}`}
+              >
+                <span>⬇</span>
+                <span>Download {meta.label} File</span>
+              </a>
+              <button
+                type="button"
+                className="download-btn-secondary"
+                onClick={() => onCopy && onCopy(f.downloadUrl, "download_link")}
+                title="Copy direct download URL"
+              >
+                📋 Link
+              </button>
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 export default function Workspace() {
   const [userName, setUserName] = useState(null);
   const [theme, setTheme] = useState("light");
@@ -549,9 +757,9 @@ export default function Workspace() {
     setStep("active");
   }, [userId, userName]);
 
-  // ---- Refresh the list of team members' threads + branches (project workspaces) ----
+  // ---- Refresh the list of team members' threads + branches ----
   const refreshThreads = useCallback(async () => {
-    if (!workspace || workspace.type !== "project") return;
+    if (!workspace) return;
     try {
       const res = await fetch(`${API_BASE}/api/workspace/${workspace.id}/threads`);
       const data = await res.json();
@@ -691,12 +899,13 @@ export default function Workspace() {
   useEffect(() => {
     if (!workspace) return;
     const isProject = workspace.type === "project";
-    if (isProject && !activeThread) return; // wait for default thread to be set
+    const isBranch = activeThread?.isBranch || activeThread?.thread_id?.startsWith("branch-");
+    if (isProject && !activeThread && !isBranch) return;
     let cancelled = false;
     setHistoryLoading(true);
     (async () => {
       try {
-        const url = isProject
+        const url = (isProject || isBranch) && activeThread?.thread_id
           ? `${API_BASE}/api/workspace/${workspace.id}/thread/${encodeURIComponent(activeThread.thread_id)}/messages`
           : `${API_BASE}/api/workspace/${workspace.id}/messages`;
         const res = await fetch(url);
@@ -810,6 +1019,55 @@ export default function Workspace() {
     el.style.height = Math.min(el.scrollHeight, 160) + "px";
   }, [inputText]);
 
+  // ---- Create / Fork a conversation branch from current or specific message ----
+  const createBranchFromCurrent = async (branchPointMsgId = null) => {
+    if (!workspace) return;
+    setIsBranching(true);
+    try {
+      const parentThreadId = activeThread?.thread_id || (workspace.type === "project" ? `member-${userId}` : workspace.id);
+      const parentOwnerId = activeThread?.owner_id || userId;
+      const parentOwnerName = activeThread?.owner_name || userName || "Member";
+      const lastMsgId = branchPointMsgId || (messages.length ? messages[messages.length - 1].id : null);
+
+      const branchRes = await fetch(`${API_BASE}/api/workspace/branch`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          workspace_id: workspace.id,
+          parent_thread_id: parentThreadId,
+          parent_owner_id: parentOwnerId,
+          parent_owner_name: parentOwnerName,
+          branch_point_message_id: lastMsgId,
+          branch_owner_id: userId,
+          branch_owner_name: userName || "Member",
+        }),
+      });
+      const branchData = await branchRes.json().catch(() => ({}));
+      if (!branchRes.ok) throw new Error(branchData?.detail || "Could not create branch.");
+
+      const newBranchId = branchData.branch_id;
+      const nextActiveThread = {
+        thread_id: newBranchId,
+        owner_id: userId,
+        owner_name: userName || "Member",
+        isBranch: true,
+        parentOwnerName: parentOwnerName,
+      };
+      setActiveThread(nextActiveThread);
+      refreshThreads();
+      setShareToast("🌿 Branch created! You are now exploring an alternative path.");
+      setTimeout(() => setShareToast(""), 3500);
+    } catch (err) {
+      setMessages((prev) => [...prev, {
+        role: "ai",
+        user_name: "System",
+        content: `⚠️ Could not create branch: ${String(err?.message || err)}`,
+      }]);
+    } finally {
+      setIsBranching(false);
+    }
+  };
+
   const uploadSelectedFile = async () => {
     if (!selectedFile) return null;
     const formData = new FormData();
@@ -819,11 +1077,12 @@ export default function Workspace() {
     return res.json();
   };
 
-  const sendMessage = async () => {
-    if ((!inputText.trim() && !selectedFile) || isLoading || !workspace) return;
+  const sendMessage = async (overrideText = null) => {
+    const rawText = typeof overrideText === "string" ? overrideText : inputText;
+    if ((!rawText.trim() && !selectedFile) || isLoading || !workspace) return;
     if (sendLockRef.current) return; // already sending — ignore the duplicate trigger
     sendLockRef.current = true;
-    const textToSend = inputText.trim();
+    const textToSend = rawText.trim();
     setInputText("");
     setIsLoading(true);
 
@@ -1761,38 +2020,52 @@ export default function Workspace() {
                       );
                     })}
                 </div>
+              </div>
+            )}
 
-                {branches.length > 0 && (
-                  <div style={{ marginTop: 12 }}>
-                    <div style={{ ...styles.sidebarLabel, fontSize: 10.5, opacity: 0.8 }}>Branches</div>
-                    <div style={styles.recentListCompact}>
-                      {branches.map((b) => (
-                        <button
-                          key={b.branch_id}
-                          type="button"
-                          style={{
-                            ...styles.recentRowCompact,
-                            ...(activeThread?.thread_id === b.branch_id ? styles.recentRowActive : {}),
-                          }}
-                          onClick={() => viewThread({
-                            thread_id: b.branch_id,
-                            owner_id: b.branch_owner_id,
-                            owner_name: b.branch_owner_name,
-                            isBranch: true,
-                            parentOwnerName: b.parent_owner_name,
-                          })}
-                        >
-                          <span style={styles.recentIconSm}>🌿</span>
-                          <span style={styles.recentNameSm}>
-                            {b.branch_owner_id === userId
-                              ? `Your branch of ${b.parent_owner_name}'s chat`
-                              : `${b.branch_owner_name}'s branch of your chat`}
-                          </span>
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+            {branches.length > 0 && (
+              <div style={styles.sidebarSection}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                  <div style={styles.sidebarLabel}>Branches ({branches.length})</div>
+                  <button
+                    type="button"
+                    style={{ background: "none", border: "none", color: "var(--navy)", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
+                    onClick={() => createBranchFromCurrent()}
+                    title="Create new branch"
+                  >
+                    + Branch
+                  </button>
+                </div>
+                <div style={styles.recentListCompact}>
+                  {branches.map((b) => {
+                    const bId = b.id || b.branch_id;
+                    const isSelected = activeThread?.thread_id === bId;
+                    return (
+                      <button
+                        key={bId}
+                        type="button"
+                        style={{
+                          ...styles.recentRowCompact,
+                          ...(isSelected ? styles.recentRowActive : {}),
+                        }}
+                        onClick={() => viewThread({
+                          thread_id: bId,
+                          owner_id: b.branch_owner_id,
+                          owner_name: b.branch_owner_name,
+                          isBranch: true,
+                          parentOwnerName: b.parent_owner_name,
+                        })}
+                      >
+                        <span style={styles.recentIconSm}>🌿</span>
+                        <span style={styles.recentNameSm}>
+                          {b.branch_owner_id === userId
+                            ? `Your branch (${(b.parent_owner_name || "chat").split(" ")[0]})`
+                            : `${b.branch_owner_name}'s branch`}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
             )}
 
@@ -2062,6 +2335,14 @@ export default function Workspace() {
                 </div>
               </div>
               <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+                <button
+                  style={styles.branchHeaderBtn}
+                  onClick={() => createBranchFromCurrent()}
+                  title="Create a new branch / fork of this conversation"
+                  disabled={isBranching}
+                >
+                  🌿 <span className="desktop-only" style={{ marginLeft: 3 }}>Create Branch</span>
+                </button>
                 {workspace.type === "project" && (
                   <button style={styles.inviteHeaderBtn} onClick={() => setShowInvite(true)}>
                     🔗 <span className="desktop-only" style={{ marginLeft: 3 }}>Invite</span>
@@ -2089,9 +2370,9 @@ export default function Workspace() {
               👀 Viewing <strong>{activeThread.owner_name}</strong>'s chat. Anything you send here starts your own private branch, {activeThread.owner_name}'s chat stays untouched.
             </div>
           )}
-          {workspace.type === "project" && activeThread?.isBranch && (
+          {activeThread?.isBranch && (
             <div style={styles.branchBanner}>
-              🌿 This is your branch of <strong>{activeThread.parentOwnerName}</strong>'s chat, continued from where it was left. {activeThread.parentOwnerName} has been notified.
+              🌿 This is your branch of <strong>{activeThread.parentOwnerName || "main"}</strong>'s chat, continued from where it was left.
             </div>
           )}
 
@@ -2104,12 +2385,56 @@ export default function Workspace() {
             )}
 
             {!historyLoading && messages.length === 0 && (
-              <div style={styles.emptyState}>
-                <div style={styles.emptyOrb}>💬</div>
-                <p style={styles.emptyTitle}>No messages yet</p>
-                <p style={styles.emptySubtitle}>
-                  Try: "Summarize this and save it as a Word doc" or drop a file in.
+              <div className="quick-start-container">
+                <div style={{ fontSize: 34, marginBottom: 8 }}>✨</div>
+                <h2 className="quick-start-greeting brand-font">Welcome, {userName || "there"}! 👋</h2>
+                <p className="quick-start-sub">
+                  NexaAI answers questions directly in chat. Documents & spreadsheets are generated <strong>only when requested</strong> with one-click download buttons.
                 </p>
+                <div className="quick-start-grid">
+                  <div className="quick-start-card" onClick={() => sendMessage("Vehari ka live weather batao")}>
+                    <span className="quick-start-card-icon">⛅</span>
+                    <div>
+                      <div className="quick-start-card-title">Live Weather (Direct Chat)</div>
+                      <div className="quick-start-card-prompt">"Vehari ka live weather batao"</div>
+                    </div>
+                  </div>
+                  <div className="quick-start-card" onClick={() => sendMessage("Vehari weather ka detailed PDF report bana kr download do")}>
+                    <span className="quick-start-card-icon">📄</span>
+                    <div>
+                      <div className="quick-start-card-title">Generate PDF File</div>
+                      <div className="quick-start-card-prompt">"Vehari weather ka PDF bana kr download do"</div>
+                    </div>
+                  </div>
+                  <div className="quick-start-card" onClick={() => sendMessage("Pakistan IT exports and AI industry pr Word document banao")}>
+                    <span className="quick-start-card-icon">📝</span>
+                    <div>
+                      <div className="quick-start-card-title">Create Word Document</div>
+                      <div className="quick-start-card-prompt">"AI industry pr Word doc banao"</div>
+                    </div>
+                  </div>
+                  <div className="quick-start-card" onClick={() => sendMessage("Monthly household budget planner ka Excel sheet banao")}>
+                    <span className="quick-start-card-icon">📊</span>
+                    <div>
+                      <div className="quick-start-card-title">Create Excel Spreadsheet</div>
+                      <div className="quick-start-card-prompt">"Monthly budget ka Excel sheet banao"</div>
+                    </div>
+                  </div>
+                  <div className="quick-start-card" onClick={() => sendMessage("Latest technology and artificial intelligence news search karo")}>
+                    <span className="quick-start-card-icon">🔍</span>
+                    <div>
+                      <div className="quick-start-card-title">Live Internet Search</div>
+                      <div className="quick-start-card-prompt">"Latest tech news search karo"</div>
+                    </div>
+                  </div>
+                  <div className="quick-start-card" onClick={() => sendMessage("Python fastAPI vs NextJS framework difference samjhao")}>
+                    <span className="quick-start-card-icon">💡</span>
+                    <div>
+                      <div className="quick-start-card-title">General Chat / Coding</div>
+                      <div className="quick-start-card-prompt">"Python vs NextJS difference samjhao"</div>
+                    </div>
+                  </div>
+                </div>
               </div>
             )}
 
@@ -2180,6 +2505,14 @@ export default function Workspace() {
                               ↩ Reply
                             </button>
                           )}
+                          <button
+                            type="button"
+                            style={styles.branchMsgBtn}
+                            title="Branch conversation from here"
+                            onClick={() => createBranchFromCurrent(msg.id)}
+                          >
+                            🌿 Branch
+                          </button>
                         </div>
                         <div
                           style={{
@@ -2206,7 +2539,11 @@ export default function Workspace() {
                               </div>
                             </div>
                           )}
-                          {msg.content}
+                          <MessageContent
+                            content={msg.content}
+                            isUser={isUser}
+                            onCopy={copyToClipboard}
+                          />
                         </div>
                       </div>
                       {isUser && (
@@ -2295,7 +2632,7 @@ export default function Workspace() {
                 ref={textareaRef}
                 rows={1}
                 style={styles.textarea}
-                placeholder="Message NexaAI…"
+                placeholder="Message NexaAI… (e.g. 'Vehari ka weather batao' or 'PDF/Word file bana do')"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={handleKeyDown}
@@ -2351,6 +2688,12 @@ export default function Workspace() {
 
               <button style={styles.modalCloseBtn} onClick={() => setShowInvite(false)}>Done</button>
             </div>
+          </div>
+        )}
+
+        {shareToast && (
+          <div style={styles.toast}>
+            {shareToast}
           </div>
         )}
       </div>
@@ -2686,6 +3029,11 @@ const styles = {
     flexShrink: 0, padding: "9px 16px", borderRadius: 20, border: "1px solid var(--navy-tint-18)",
     background: "var(--bg-light)", color: "var(--navy)", fontSize: 12.5, fontWeight: 700,
   },
+  branchHeaderBtn: {
+    flexShrink: 0, padding: "8px 15px", borderRadius: 20, border: "1px solid var(--navy-tint-18)",
+    background: "var(--bg-light)", color: "var(--navy)", fontSize: 12.5, fontWeight: 700,
+    cursor: "pointer", display: "flex", alignItems: "center", gap: 4, transition: "background 0.15s, transform 0.1s",
+  },
   notifBadge: {
     position: "absolute", top: -4, right: -4, minWidth: 16, height: 16, borderRadius: 8,
     background: "var(--danger)", color: "#fff", fontSize: 10, fontWeight: 700,
@@ -2742,6 +3090,16 @@ const styles = {
   replyBtn: {
     border: "none", background: "transparent", color: "var(--ink-soft)",
     fontSize: 10.5, fontWeight: 700, cursor: "pointer", opacity: 0.65, padding: "0 2px",
+  },
+  branchMsgBtn: {
+    border: "none", background: "transparent", color: "var(--navy)",
+    fontSize: 10.5, fontWeight: 700, cursor: "pointer", opacity: 0.75, padding: "0 2px",
+    display: "inline-flex", alignItems: "center", gap: 2,
+  },
+  toast: {
+    position: "fixed", bottom: 24, right: 24, background: "var(--navy)",
+    color: "#fff", padding: "10px 18px", borderRadius: "var(--radius-sm)",
+    fontSize: 13.5, fontWeight: 600, boxShadow: "var(--shadow-lg)", zIndex: 9999,
   },
   replyQuote: {
     borderLeft: "3px solid", borderRadius: 6, padding: "6px 10px", marginBottom: 8,

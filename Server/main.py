@@ -282,10 +282,28 @@ async def download_file(filename: str):
     file_path = os.path.join(UPLOAD_DIR, safe_filename)
     if not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"File '{safe_filename}' not found in storage.")
+    
+    # Map common MIME types
+    ext = safe_filename.lower().split(".")[-1]
+    mime_types = {
+        "pdf": "application/pdf",
+        "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+        "xlsx": "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        "csv": "text/csv",
+        "zip": "application/zip",
+        "png": "image/png",
+        "jpg": "image/jpeg",
+        "jpeg": "image/jpeg",
+        "webp": "image/webp",
+        "txt": "text/plain"
+    }
+    media_type = mime_types.get(ext, "application/octet-stream")
+
     return FileResponse(
         path=file_path,
         filename=safe_filename,
-        media_type="application/octet-stream"
+        media_type=media_type,
+        headers={"Content-Disposition": f'attachment; filename="{safe_filename}"'}
     )
 
 # List files in workspace
@@ -295,6 +313,8 @@ def list_files():
         files = os.listdir(UPLOAD_DIR)
         file_details = []
         for f in files:
+            if f.startswith(".") or f.lower() == ".gitkeep":
+                continue
             fp = os.path.join(UPLOAD_DIR, f)
             if os.path.isfile(fp):
                 file_details.append({
@@ -389,14 +409,10 @@ async def get_thread_messages(workspace_id: str, thread_id: str):
             if branch:
                 parent_thread_id = branch["parent_thread_id"]
                 branch_point = branch.get("branch_point_message_id")
-                parent_res = (
-                    supabase.table("messages")
-                    .select("*")
-                    .eq("workspace_id", workspace_id)
-                    .eq("thread_id", parent_thread_id)
-                    .order("created_at")
-                    .execute()
-                )
+                parent_query = supabase.table("messages").select("*").eq("workspace_id", workspace_id)
+                if parent_thread_id:
+                    parent_query = parent_query.eq("thread_id", parent_thread_id)
+                parent_res = parent_query.order("created_at").execute()
                 parent_all = parent_res.data or []
                 if branch_point:
                     idx = next((i for i, m in enumerate(parent_all) if m.get("id") == branch_point), None)
@@ -436,7 +452,14 @@ def list_threads(workspace_id: str):
                 "last_at": r["created_at"],
             }
         branches_res = supabase.table("branches").select("*").eq("workspace_id", workspace_id).execute()
-        return {"threads": list(member_threads.values()), "branches": branches_res.data or []}
+        branches_data = []
+        for b in (branches_res.data or []):
+            branches_data.append({
+                **b,
+                "branch_id": b.get("id"),
+                "id": b.get("id"),
+            })
+        return {"threads": list(member_threads.values()), "branches": branches_data}
     except Exception as e:
         return {"threads": [], "branches": [], "notice": str(e)}
 
