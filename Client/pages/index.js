@@ -2392,46 +2392,46 @@ export default function Workspace() {
                   NexaAI answers questions directly in chat. Documents & spreadsheets are generated <strong>only when requested</strong> with one-click download buttons.
                 </p>
                 <div className="quick-start-grid">
-                  <div className="quick-start-card" onClick={() => sendMessage("Vehari ka live weather batao")}>
+                  <div className="quick-start-card" onClick={() => sendMessage("What is the current weather in London?")}>
                     <span className="quick-start-card-icon">⛅</span>
                     <div>
-                      <div className="quick-start-card-title">Live Weather (Direct Chat)</div>
-                      <div className="quick-start-card-prompt">"Vehari ka live weather batao"</div>
+                      <div className="quick-start-card-title">Live Weather</div>
+                      <div className="quick-start-card-prompt">"What is the current weather in London?"</div>
                     </div>
                   </div>
-                  <div className="quick-start-card" onClick={() => sendMessage("Vehari weather ka detailed PDF report bana kr download do")}>
+                  <div className="quick-start-card" onClick={() => sendMessage("Create a detailed PDF report on Renewable Energy and its future")}>
                     <span className="quick-start-card-icon">📄</span>
                     <div>
-                      <div className="quick-start-card-title">Generate PDF File</div>
-                      <div className="quick-start-card-prompt">"Vehari weather ka PDF bana kr download do"</div>
+                      <div className="quick-start-card-title">Generate PDF Document</div>
+                      <div className="quick-start-card-prompt">"Create a PDF report on Renewable Energy"</div>
                     </div>
                   </div>
-                  <div className="quick-start-card" onClick={() => sendMessage("Pakistan IT exports and AI industry pr Word document banao")}>
+                  <div className="quick-start-card" onClick={() => sendMessage("Write a professional project proposal in a Word document")}>
                     <span className="quick-start-card-icon">📝</span>
                     <div>
                       <div className="quick-start-card-title">Create Word Document</div>
-                      <div className="quick-start-card-prompt">"AI industry pr Word doc banao"</div>
+                      <div className="quick-start-card-prompt">"Draft a project proposal document"</div>
                     </div>
                   </div>
-                  <div className="quick-start-card" onClick={() => sendMessage("Monthly household budget planner ka Excel sheet banao")}>
+                  <div className="quick-start-card" onClick={() => sendMessage("Create a monthly household budget spreadsheet in Excel")}>
                     <span className="quick-start-card-icon">📊</span>
                     <div>
                       <div className="quick-start-card-title">Create Excel Spreadsheet</div>
-                      <div className="quick-start-card-prompt">"Monthly budget ka Excel sheet banao"</div>
+                      <div className="quick-start-card-prompt">"Build a monthly budget spreadsheet"</div>
                     </div>
                   </div>
-                  <div className="quick-start-card" onClick={() => sendMessage("Latest technology and artificial intelligence news search karo")}>
+                  <div className="quick-start-card" onClick={() => sendMessage("Search latest technology and artificial intelligence news")}>
                     <span className="quick-start-card-icon">🔍</span>
                     <div>
                       <div className="quick-start-card-title">Live Internet Search</div>
-                      <div className="quick-start-card-prompt">"Latest tech news search karo"</div>
+                      <div className="quick-start-card-prompt">"Latest tech and AI news search"</div>
                     </div>
                   </div>
-                  <div className="quick-start-card" onClick={() => sendMessage("Python fastAPI vs NextJS framework difference samjhao")}>
+                  <div className="quick-start-card" onClick={() => sendMessage("Explain the differences between FastAPI and Next.js")}>
                     <span className="quick-start-card-icon">💡</span>
                     <div>
                       <div className="quick-start-card-title">General Chat / Coding</div>
-                      <div className="quick-start-card-prompt">"Python vs NextJS difference samjhao"</div>
+                      <div className="quick-start-card-prompt">"FastAPI vs Next.js comparison"</div>
                     </div>
                   </div>
                 </div>
@@ -2632,7 +2632,7 @@ export default function Workspace() {
                 ref={textareaRef}
                 rows={1}
                 style={styles.textarea}
-                placeholder="Message NexaAI… (e.g. 'Vehari ka weather batao' or 'PDF/Word file bana do')"
+                placeholder="Message NexaAI…"
                 value={inputText}
                 onChange={(e) => setInputText(e.target.value)}
                 onKeyDown={handleKeyDown}
