@@ -1,0 +1,9 @@
+{
+  "name": "nexaai-tool",
+  "version": "1.0.0",
+  "scripts": {
+    "dev:all": "npx -y concurrently \"cd Server && python main.py\" \"cd Client && npm run dev\"",
+    "client": "cd Client && npm run dev",
+    "server": "cd Server && python main.py"
+  }
+}
