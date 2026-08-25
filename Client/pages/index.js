@@ -1937,6 +1937,9 @@ export default function Workspace() {
   // ============================================================
   if (!workspace) return null;
 
+  const projectRecents = recents.filter((r) => r.type === "project");
+  const chatRecents = recents.filter((r) => r.type !== "project");
+
   return (
     <>
       <Head>
@@ -2034,11 +2037,165 @@ export default function Workspace() {
               </div>
             )}
 
-            {recents.length > 0 && (
+            {/* 1. PROJECTS / TEAM WORKSPACES */}
+            {projectRecents.length > 0 && (
               <div style={styles.sidebarSection}>
-                <div style={styles.sidebarLabel}>Recent</div>
+                <div style={styles.sidebarLabel}>Projects</div>
                 <div style={styles.recentListCompact}>
-                  {recents.map((r) => (
+                  {projectRecents.map((r) => {
+                    const isProjectActive = workspace?.id === r.id;
+                    return (
+                      <div key={r.id} style={{ position: "relative", width: "100%" }}>
+                        {renamingId === r.id ? (
+                          <div style={{ display: "flex", alignItems: "center", gap: 4, width: "100%", padding: "4px 6px" }}>
+                            <input
+                              autoFocus
+                              style={styles.renameInput}
+                              value={renameDraft}
+                              onChange={(e) => setRenameDraft(e.target.value)}
+                              onKeyDown={(e) => {
+                                if (e.key === "Enter") renameRecentChat(r.id, renameDraft);
+                                if (e.key === "Escape") setRenamingId(null);
+                              }}
+                              onBlur={() => renameRecentChat(r.id, renameDraft)}
+                            />
+                          </div>
+                        ) : (
+                          <>
+                            <div
+                              className="recent-item-row"
+                              style={{
+                                ...styles.recentRowCompact,
+                                ...(isProjectActive && workspace.type === "project" ? styles.recentRowActive : {}),
+                                justifyContent: "space-between",
+                                cursor: "pointer",
+                              }}
+                              onClick={() => switchToRecent(r)}
+                              onContextMenu={(e) => {
+                                e.preventDefault();
+                                const clientX = Math.min(e.clientX, window.innerWidth - 180);
+                                const clientY = Math.min(e.clientY, window.innerHeight - 160);
+                                setContextMenu({ id: r.id, name: r.name, type: r.type, x: clientX, y: clientY });
+                              }}
+                            >
+                              <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1, cursor: "pointer" }}>
+                                <span style={styles.recentIconSm}>📁</span>
+                                <span style={{ ...styles.recentNameSm, fontWeight: isProjectActive ? 700 : 500 }}>{r.name}</span>
+                              </div>
+                              <button
+                                type="button"
+                                className="recent-options-btn"
+                                style={styles.recentOptionsBtn}
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  const rect = e.currentTarget.getBoundingClientRect();
+                                  setContextMenu({
+                                    id: r.id,
+                                    name: r.name,
+                                    type: r.type,
+                                    x: Math.min(rect.right + 4, window.innerWidth - 180),
+                                    y: Math.min(rect.top, window.innerHeight - 160),
+                                  });
+                                }}
+                                title="Options"
+                              >
+                                ⋯
+                              </button>
+                            </div>
+
+                            {/* NESTED SUB-CHATS & BRANCHES: STRICTLY UNDER THIS ACTIVE PROJECT */}
+                            {isProjectActive && workspace.type === "project" && (
+                              <div className="project-nested-chats" style={styles.projectNestedContainer}>
+                                <div style={{ fontSize: 10.5, fontWeight: 700, color: "var(--ink-soft)", padding: "3px 6px 1px", textTransform: "uppercase", letterSpacing: "0.4px" }}>
+                                  Team Chats
+                                </div>
+                                <button
+                                  type="button"
+                                  style={{
+                                    ...styles.recentRowNested,
+                                    ...(!activeThread || (activeThread.owner_id === userId && !activeThread.isBranch) ? styles.recentRowNestedActive : {}),
+                                  }}
+                                  onClick={() => viewThread(null)}
+                                >
+                                  <span style={styles.recentIconSm}>🟢</span>
+                                  <span style={styles.recentNameSm}>You</span>
+                                </button>
+                                {teamThreads
+                                  .filter((t) => t.owner_id !== userId && !t.isBranch)
+                                  .map((t) => {
+                                    const isSelected = activeThread?.owner_id === t.owner_id && !activeThread?.isBranch;
+                                    return (
+                                      <button
+                                        key={t.owner_id}
+                                        type="button"
+                                        style={{
+                                          ...styles.recentRowNested,
+                                          ...(isSelected ? styles.recentRowNestedActive : {}),
+                                        }}
+                                        onClick={() => viewThread({ ...t, isBranch: false })}
+                                      >
+                                        <span style={styles.recentIconSm}>👤</span>
+                                        <span style={styles.recentNameSm}>{t.owner_name}</span>
+                                      </button>
+                                    );
+                                  })}
+
+                                {/* Branch Sub-chats for this project */}
+                                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", padding: "5px 6px 1px", fontSize: 10.5, fontWeight: 700, color: "var(--ink-soft)", textTransform: "uppercase", letterSpacing: "0.4px" }}>
+                                  <span>Branches {branches.length > 0 ? `(${branches.length})` : ""}</span>
+                                  <span
+                                    style={{ color: "var(--navy)", cursor: "pointer", fontSize: 11, fontWeight: 700, textTransform: "none" }}
+                                    onClick={(e) => { e.stopPropagation(); createBranchFromCurrent(); }}
+                                    title="Create new branch"
+                                  >
+                                    + Branch
+                                  </span>
+                                </div>
+                                {branches.map((b) => {
+                                  const bId = b.id || b.branch_id;
+                                  const isSelected = activeThread?.thread_id === bId;
+                                  return (
+                                    <button
+                                      key={bId}
+                                      type="button"
+                                      style={{
+                                        ...styles.recentRowNested,
+                                        ...(isSelected ? styles.recentRowNestedActive : {}),
+                                      }}
+                                      onClick={() => viewThread({
+                                        thread_id: bId,
+                                        owner_id: b.branch_owner_id,
+                                        owner_name: b.branch_owner_name,
+                                        isBranch: true,
+                                        parentOwnerName: b.parent_owner_name,
+                                      })}
+                                    >
+                                      <span style={styles.recentIconSm}>🌿</span>
+                                      <span style={styles.recentNameSm}>
+                                        {b.branch_owner_id === userId
+                                          ? `Your branch (${(b.parent_owner_name || "chat").split(" ")[0]})`
+                                          : `${b.branch_owner_name}'s branch`}
+                                      </span>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* 2. RECENT CHATS (ONLY PERSONAL / DIRECT CHATS) */}
+            {chatRecents.length > 0 && (
+              <div style={styles.sidebarSection}>
+                <div style={styles.sidebarLabel}>Recent Chats</div>
+                <div style={styles.recentListCompact}>
+                  {chatRecents.map((r) => (
                     <div
                       key={r.id}
                       style={{ position: "relative", width: "100%", cursor: "pointer" }}
@@ -2068,14 +2225,14 @@ export default function Workspace() {
                           className="recent-item-row"
                           style={{
                             ...styles.recentRowCompact,
-                            ...(r.id === workspace?.id ? styles.recentRowActive : {}),
+                            ...(r.id === workspace?.id && workspace?.type !== "project" ? styles.recentRowActive : {}),
                             justifyContent: "space-between",
                             cursor: "pointer",
                           }}
                           onClick={() => switchToRecent(r)}
                         >
                           <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 0, flex: 1, cursor: "pointer" }}>
-                            <span style={styles.recentIconSm}>{r.type === "project" ? "📁" : "💬"}</span>
+                            <span style={styles.recentIconSm}>💬</span>
                             <span style={styles.recentNameSm}>{r.name}</span>
                           </div>
                           <button
@@ -2101,90 +2258,6 @@ export default function Workspace() {
                       )}
                     </div>
                   ))}
-                </div>
-              </div>
-            )}
-
-            {workspace.type === "project" && (
-              <div style={styles.sidebarSection}>
-                <div style={styles.sidebarLabel}>Team Chats</div>
-                <div style={styles.recentListCompact}>
-                  <button
-                    type="button"
-                    style={{
-                      ...styles.recentRowCompact,
-                      ...(!activeThread ? styles.recentRowActive : {}),
-                    }}
-                    onClick={() => viewThread(null)}
-                  >
-                    <span style={styles.recentIconSm}>🟢</span>
-                    <span style={styles.recentNameSm}>You</span>
-                  </button>
-                  {teamThreads
-                    .filter((t) => t.owner_id !== userId && !t.isBranch)
-                    .map((t) => {
-                      const isSelected = activeThread?.owner_id === t.owner_id && !activeThread?.isBranch;
-                      return (
-                        <button
-                          key={t.owner_id}
-                          type="button"
-                          style={{
-                            ...styles.recentRowCompact,
-                            ...(isSelected ? styles.recentRowActive : {}),
-                          }}
-                          onClick={() => viewThread({ ...t, isBranch: false })}
-                        >
-                          <span style={styles.recentIconSm}>👤</span>
-                          <span style={styles.recentNameSm}>{t.owner_name}</span>
-                        </button>
-                      );
-                    })}
-                </div>
-              </div>
-            )}
-
-            {branches.length > 0 && (
-              <div style={styles.sidebarSection}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                  <div style={styles.sidebarLabel}>Branches ({branches.length})</div>
-                  <button
-                    type="button"
-                    style={{ background: "none", border: "none", color: "var(--navy)", fontSize: 11, fontWeight: 700, cursor: "pointer" }}
-                    onClick={() => createBranchFromCurrent()}
-                    title="Create new branch"
-                  >
-                    + Branch
-                  </button>
-                </div>
-                <div style={styles.recentListCompact}>
-                  {branches.map((b) => {
-                    const bId = b.id || b.branch_id;
-                    const isSelected = activeThread?.thread_id === bId;
-                    return (
-                      <button
-                        key={bId}
-                        type="button"
-                        style={{
-                          ...styles.recentRowCompact,
-                          ...(isSelected ? styles.recentRowActive : {}),
-                        }}
-                        onClick={() => viewThread({
-                          thread_id: bId,
-                          owner_id: b.branch_owner_id,
-                          owner_name: b.branch_owner_name,
-                          isBranch: true,
-                          parentOwnerName: b.parent_owner_name,
-                        })}
-                      >
-                        <span style={styles.recentIconSm}>🌿</span>
-                        <span style={styles.recentNameSm}>
-                          {b.branch_owner_id === userId
-                            ? `Your branch (${(b.parent_owner_name || "chat").split(" ")[0]})`
-                            : `${b.branch_owner_name}'s branch`}
-                        </span>
-                      </button>
-                    );
-                  })}
                 </div>
               </div>
             )}
@@ -3089,6 +3162,36 @@ const styles = {
   recentRowActive: { background: "var(--navy-tint-08)" },
   recentIconSm: { fontSize: 13, flexShrink: 0, cursor: "pointer", userSelect: "none" },
   recentNameSm: { fontSize: 12.5, color: "var(--ink)", overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap", cursor: "pointer", userSelect: "none" },
+
+  projectNestedContainer: {
+    marginLeft: 12,
+    paddingLeft: 8,
+    borderLeft: "2px solid var(--navy-tint-18)",
+    display: "flex",
+    flexDirection: "column",
+    gap: 2,
+    marginTop: 3,
+    marginBottom: 6,
+  },
+  recentRowNested: {
+    display: "flex",
+    alignItems: "center",
+    gap: 7,
+    padding: "5px 7px",
+    borderRadius: "var(--radius-sm)",
+    border: "none",
+    background: "transparent",
+    color: "var(--ink)",
+    fontSize: 12,
+    cursor: "pointer",
+    width: "100%",
+    textAlign: "left",
+    transition: "background 0.15s ease",
+  },
+  recentRowNestedActive: {
+    background: "var(--navy-tint-12)",
+    fontWeight: 600,
+  },
 
   filesList: { overflowY: "auto", flex: 1, display: "flex", flexDirection: "column", gap: 6, paddingRight: 2 },
   filesEmpty: { fontSize: 12.5, color: "var(--ink-soft)", lineHeight: 1.5, padding: "6px 2px" },

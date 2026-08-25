@@ -1,7 +1,16 @@
 {
-  "proj-mxpveqakzw": {
-    "id": "proj-mxpveqakzw",
-    "name": "student",
-    "type": "project"
+  "chat-w72a5h05kz": {
+    "id": "chat-w72a5h05kz",
+    "name": "what is the capital of france",
+    "type": "personal",
+    "created_by": null,
+    "updated_at": 1787672043.5890875
+  },
+  "personal-user-1qjc7upi": {
+    "id": "personal-user-1qjc7upi",
+    "name": "Ali's Chat",
+    "type": "personal",
+    "created_by": null,
+    "updated_at": 1787672043.641666
   }
 }
