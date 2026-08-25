@@ -37,8 +37,24 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Accounts are stored in a local JSON file next to this script — no extra
 # database setup needed. Passwords are never stored in plain text.
 USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+PROJECTS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "projects.json")
 SESSIONS: dict[str, str] = {}  # token -> username (in-memory; resets if the server restarts)
 IN_MEMORY_THREAD_HISTORY: dict[str, list] = {}  # "workspace_thread" -> list of {role, content}
+
+
+def _load_projects() -> dict:
+    if not os.path.exists(PROJECTS_FILE):
+        return {}
+    try:
+        with open(PROJECTS_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {}
+
+
+def _save_projects(projects: dict) -> None:
+    with open(PROJECTS_FILE, "w", encoding="utf-8") as f:
+        json.dump(projects, f, indent=2)
 
 
 def _load_users() -> dict:
@@ -146,11 +162,94 @@ class ForgotPasswordRequest(BaseModel):
     security_answer: str
     new_password: str
 
+class ProjectCreateRequest(BaseModel):
+    id: str
+    name: str
+    user_name: str | None = None
+    user_id: str | None = None
+
+class ProjectRenameRequest(BaseModel):
+    name: str
+
 # ---- Routes ----
 
 @app.get("/")
 def read_root():
     return {"status": "AI Workspace Server is running", "version": "2.0"}
+
+# Register or get workspace / project details
+@app.post("/api/workspace/create")
+def register_workspace(req: ProjectCreateRequest):
+    projects = _load_projects()
+    clean_name = req.name.strip() or f"Project ({req.id.split('-')[-1][:6]})"
+    projects[req.id] = {
+        "id": req.id,
+        "name": clean_name,
+        "created_by": req.user_name or req.user_id or "Anonymous",
+        "user_id": req.user_id,
+        "created_at": time.time(),
+    }
+    _save_projects(projects)
+    if supabase:
+        try:
+            supabase.table("workspaces").upsert({
+                "id": req.id,
+                "name": clean_name,
+                "created_by": req.user_name or req.user_id,
+            }).execute()
+        except Exception as e:
+            print(f"Supabase workspace upsert notice: {e}")
+    return {"status": "success", "workspace": projects[req.id]}
+
+@app.get("/api/workspace/{workspace_id}")
+def get_workspace_info(workspace_id: str):
+    projects = _load_projects()
+    if workspace_id in projects and projects[workspace_id].get("name"):
+        return {"status": "success", "workspace": projects[workspace_id]}
+    if supabase:
+        try:
+            res = supabase.table("workspaces").select("*").eq("id", workspace_id).execute()
+            if res.data and len(res.data) > 0:
+                ws = res.data[0]
+                n = ws.get("name")
+                if n:
+                    projects[workspace_id] = {
+                        "id": workspace_id,
+                        "name": n,
+                        "created_by": ws.get("created_by"),
+                    }
+                    _save_projects(projects)
+                    return {"status": "success", "workspace": projects[workspace_id]}
+        except Exception:
+            pass
+    default_name = f"Project ({workspace_id.split('-')[-1][:6]})"
+    return {
+        "status": "fallback",
+        "workspace": {
+            "id": workspace_id,
+            "name": default_name,
+        }
+    }
+
+@app.post("/api/workspace/{workspace_id}/rename")
+def rename_workspace(workspace_id: str, req: ProjectRenameRequest):
+    projects = _load_projects()
+    clean_name = req.name.strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Project name cannot be empty.")
+    if workspace_id not in projects:
+        projects[workspace_id] = {"id": workspace_id}
+    projects[workspace_id]["name"] = clean_name
+    _save_projects(projects)
+    if supabase:
+        try:
+            supabase.table("workspaces").upsert({
+                "id": workspace_id,
+                "name": clean_name,
+            }).execute()
+        except Exception as e:
+            print(f"Supabase workspace rename notice: {e}")
+    return {"status": "success", "workspace": projects[workspace_id]}
 
 # Create a new account
 @app.post("/api/auth/signup")

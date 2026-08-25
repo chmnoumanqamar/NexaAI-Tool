@@ -480,7 +480,29 @@ export default function Workspace() {
       const cleanUrl = window.location.pathname;
       window.history.replaceState({}, "", cleanUrl);
     }
-    setRecents(loadRecents());
+    const initialRecents = loadRecents();
+    setRecents(initialRecents);
+
+    // Auto-resolve any generic 'Shared Project (xyz)' names with real server names
+    if (initialRecents.some((r) => r.type === "project" || r.id?.startsWith("proj-"))) {
+      Promise.all(
+        initialRecents.map(async (r) => {
+          if (r.type === "project" || r.id?.startsWith("proj-")) {
+            try {
+              const res = await fetch(`${API_BASE}/api/workspace/${r.id}`);
+              const data = await res.json();
+              if (data?.workspace?.name && data.workspace.name !== r.name && !data.workspace.name.startsWith("Shared Project (")) {
+                return { ...r, name: data.workspace.name };
+              }
+            } catch {}
+          }
+          return r;
+        })
+      ).then((synced) => {
+        setRecents(synced);
+        saveRecents(synced);
+      });
+    }
 
     const token = localStorage.getItem("workspace_auth_token");
     if (!token) {
@@ -755,6 +777,24 @@ export default function Workspace() {
       setRecents(next);
     }
     setStep("active");
+
+    // If project, resolve latest real project name from backend in background
+    if (entry.type === "project" || entry.id?.startsWith("proj-")) {
+      fetch(`${API_BASE}/api/workspace/${entry.id}`)
+        .then((r) => r.json())
+        .then((data) => {
+          if (data?.workspace?.name && data.workspace.name !== entry.name) {
+            const realName = data.workspace.name;
+            setWorkspace((prev) => (prev?.id === entry.id ? { ...prev, name: realName } : prev));
+            setRecents((prev) => {
+              const nextList = prev.map((r) => (r.id === entry.id ? { ...r, name: realName } : r));
+              saveRecents(nextList);
+              return nextList;
+            });
+          }
+        })
+        .catch(() => {});
+    }
   }, [userId, userName]);
 
   // ---- Refresh the list of team members' threads + branches ----
@@ -824,20 +864,48 @@ export default function Workspace() {
     const trimmed = projectNameDraft.trim();
     if (!trimmed) return;
     const id = genId("proj");
-    enterWorkspace({ id, name: trimmed, type: "project" });
+    const entry = { id, name: trimmed, type: "project" };
+
+    // Register project name on server so all collaborators/join links get the real name
+    fetch(`${API_BASE}/api/workspace/create`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        id,
+        name: trimmed,
+        user_name: userName,
+        user_id: userId,
+      }),
+    }).catch(() => {});
+
+    enterWorkspace(entry);
     setProjectNameDraft("");
     setShowInvite(true);
   };
 
-  const joinProject = () => {
+  const joinProject = async () => {
     const id = parseWorkspaceInput(joinDraft);
     if (!id) {
       setJoinError("Paste an invite link or workspace ID first.");
       return;
     }
     const existing = recents.find((r) => r.id === id);
-    const name = existing?.name || `Shared Project (${id.slice(-6)})`;
-    enterWorkspace({ id, name, type: "project" });
+    let resolvedName = existing?.name;
+
+    if (!resolvedName || resolvedName.startsWith("Shared Project (") || resolvedName.startsWith("Project (")) {
+      try {
+        const res = await fetch(`${API_BASE}/api/workspace/${id}`);
+        const data = await res.json();
+        if (data?.workspace?.name) {
+          resolvedName = data.workspace.name;
+        }
+      } catch {}
+    }
+    if (!resolvedName) {
+      resolvedName = `Project (${id.slice(-6)})`;
+    }
+
+    enterWorkspace({ id, name: resolvedName, type: "project" });
     setJoinDraft("");
     setJoinError("");
     setPendingJoinId(null);
@@ -883,6 +951,13 @@ export default function Workspace() {
     if (workspace?.id === chatId) {
       setWorkspace((prev) => ({ ...prev, name: trimmed }));
     }
+    // Sync rename with server
+    fetch(`${API_BASE}/api/workspace/${chatId}/rename`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name: trimmed }),
+    }).catch(() => {});
+
     setRenamingId(null);
     setContextMenu(null);
   };
