@@ -38,6 +38,7 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # database setup needed. Passwords are never stored in plain text.
 USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
 SESSIONS: dict[str, str] = {}  # token -> username (in-memory; resets if the server restarts)
+IN_MEMORY_THREAD_HISTORY: dict[str, list] = {}  # "workspace_thread" -> list of {role, content}
 
 
 def _load_users() -> dict:
@@ -551,16 +552,71 @@ async def send_message(request: ChatRequest):
         except Exception as e:
             print(f"Supabase user msg notice: {e}")
 
-    # Run AI agent with multi-tasking capabilities
+    # Build conversation context (memory) for AI
+    conversation_messages = []
+    
+    if supabase:
+        try:
+            if thread_id.startswith("branch-"):
+                branch_res = supabase.table("branches").select("*").eq("id", thread_id).execute()
+                branch = (branch_res.data or [None])[0]
+                parent_msgs = []
+                if branch:
+                    parent_thread_id = branch.get("parent_thread_id")
+                    branch_point = branch.get("branch_point_message_id")
+                    p_query = supabase.table("messages").select("*").eq("workspace_id", request.workspace_id)
+                    if parent_thread_id:
+                        p_query = p_query.eq("thread_id", parent_thread_id)
+                    p_res = p_query.order("created_at").execute()
+                    p_all = p_res.data or []
+                    if branch_point:
+                        idx = next((i for i, m in enumerate(p_all) if m.get("id") == branch_point), None)
+                        parent_msgs = p_all[: idx + 1] if idx is not None else p_all
+                    else:
+                        parent_msgs = p_all
+                own_res = supabase.table("messages").select("*").eq("workspace_id", request.workspace_id).eq("thread_id", thread_id).order("created_at").execute()
+                all_thread_msgs = parent_msgs + (own_res.data or [])
+            else:
+                res = supabase.table("messages").select("*").eq("workspace_id", request.workspace_id).eq("thread_id", thread_id).order("created_at").execute()
+                all_thread_msgs = res.data or []
+                
+            # Exclude current message if already inserted, take up to last 16 messages for memory
+            history_rows = all_thread_msgs[:-1] if (all_thread_msgs and all_thread_msgs[-1].get("content") == request.message) else all_thread_msgs
+            recent_msgs = history_rows[-16:] if len(history_rows) > 16 else history_rows
+            for m in recent_msgs:
+                r = "user" if m.get("role") == "user" else "assistant"
+                c = (m.get("content") or "").strip()
+                if c:
+                    conversation_messages.append({"role": r, "content": c})
+        except Exception as e:
+            print(f"Notice fetching context messages: {e}")
+
+    # Fallback to in-memory memory if database returned no history
+    cache_key = f"{request.workspace_id}_{thread_id}"
+    if not conversation_messages and cache_key in IN_MEMORY_THREAD_HISTORY:
+        conversation_messages = list(IN_MEMORY_THREAD_HISTORY[cache_key])
+
+    # Ensure current user message is at the end of the context
+    if not conversation_messages or conversation_messages[-1].get("content") != request.message:
+        conversation_messages.append({"role": "user", "content": request.message})
+
+    # Run AI agent with multi-tasking capabilities & full memory
     try:
         result = await agent.ainvoke({
-            "messages": [{"role": "user", "content": request.message}]
+            "messages": conversation_messages
         })
         msgs = result.get("messages", [])
         ai_text = msgs[-1].content if msgs else "Task completed."
     except Exception as e:
         print(f"Agent error: {e}")
         ai_text = f"⚠️ Agent error: {str(e)}"
+
+    # Update in-memory fallback cache
+    IN_MEMORY_THREAD_HISTORY.setdefault(cache_key, [])
+    IN_MEMORY_THREAD_HISTORY[cache_key].append({"role": "user", "content": request.message})
+    IN_MEMORY_THREAD_HISTORY[cache_key].append({"role": "assistant", "content": ai_text})
+    if len(IN_MEMORY_THREAD_HISTORY[cache_key]) > 20:
+        IN_MEMORY_THREAD_HISTORY[cache_key] = IN_MEMORY_THREAD_HISTORY[cache_key][-20:]
 
     # Save AI reply to Supabase
     if supabase:

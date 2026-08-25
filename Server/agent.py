@@ -437,6 +437,39 @@ def analyze_uploaded_image(image_filename: str, question: str = "Describe this i
         return f"Image vision error: {str(e)}"
 
 # ============================================================
+# TOOL 10: List Workspace Files
+# ============================================================
+@tool
+def list_workspace_files() -> str:
+    """Lists all files currently available in the workspace (uploaded files, generated PDFs, Excel sheets, Word docs, etc.).
+    Use this when the user asks what files exist or refers to previous files."""
+    try:
+        files = [f for f in os.listdir(UPLOAD_DIR) if not f.startswith(".") and f.lower() != ".gitkeep"]
+        if not files:
+            return "No files currently uploaded or generated in this workspace."
+        return f"Files available in workspace: {', '.join(files)}"
+    except Exception as e:
+        return f"Error listing workspace files: {str(e)}"
+
+# ============================================================
+# TOOL 11: Read Workspace File Content
+# ============================================================
+@tool
+def read_workspace_file(filename: str) -> str:
+    """Reads the text content of a file (e.g. .txt, .csv, .py, .js, .json, .md, .html) from workspace storage.
+    Use this when user asks to read, inspect, or summarize a text/code/csv file in the workspace."""
+    try:
+        safe_fn = os.path.basename(filename)
+        path = os.path.join(UPLOAD_DIR, safe_fn)
+        if not os.path.exists(path):
+            return f"File '{safe_fn}' not found in workspace."
+        with open(path, "r", encoding="utf-8", errors="ignore") as f:
+            content = f.read(6000)
+        return f"Content of '{safe_fn}':\n{content}"
+    except Exception as e:
+        return f"Error reading file '{filename}': {str(e)}"
+
+# ============================================================
 # Agent Setup
 # ============================================================
 agent_tools = [
@@ -448,7 +481,9 @@ agent_tools = [
     generate_pdf,
     generate_word,
     zip_files,
-    analyze_uploaded_image
+    analyze_uploaded_image,
+    list_workspace_files,
+    read_workspace_file
 ]
 
 system_prompt = (
@@ -462,18 +497,21 @@ system_prompt = (
     "6. `generate_excel`: Generates Microsoft Excel (.xlsx) spreadsheets.\n"
     "7. `generate_csv`: Generates CSV (.csv) data files.\n"
     "8. `zip_files`: Bundles files into a ZIP archive (.zip).\n"
-    "9. `analyze_uploaded_image`: Vision tool to inspect user uploaded images.\n\n"
+    "9. `analyze_uploaded_image`: Vision tool to inspect user uploaded images.\n"
+    "10. `list_workspace_files`: Inspects and lists all files currently uploaded or generated in the workspace.\n"
+    "11. `read_workspace_file`: Reads text/code/data from files in the workspace.\n\n"
     "STRICT CORE RULES (READ CAREFULLY):\n"
+    "- CONVERSATION CONTEXT & MEMORY: You have full access to previous messages in the current conversation. When the user asks follow-up questions (e.g. 'give me the third file', 'explain step 2', 'app.py', 'continue', 'make changes to it'), always refer to what was previously discussed, provide the requested code/information thoroughly, and never claim you lack context.\n"
     "- MULTI-LANGUAGE RESPONSIVENESS (MANDATORY): Always detect the language and script of the user's message (English, Roman Urdu / Roman Hindi, Urdu script اردو, Hindi हिन्दी, Arabic العربية, Spanish, French, German, Turkish, Chinese, etc.) and ALWAYS reply fluently, accurately, and naturally in that EXACT SAME language and script.\n"
     "  * If the user speaks in English, reply in pure, elegant English.\n"
     "  * If the user speaks in Roman Urdu / Roman Hindi (e.g. 'vehari ka mausam kaisa hai', 'kya haal hai', 'mujhe ek report chahiye'), reply naturally and clearly in Roman Urdu.\n"
     "  * If the user writes in Urdu script (اردو), reply in Urdu script.\n"
     "  * If the user writes in Arabic, Spanish, French, etc., reply in that specific language.\n"
     "  * Never mix languages unless explicitly requested by the user.\n"
-    "- NEVER generate files (PDF, Word, Excel, CSV, ZIP) automatically for normal questions, searches, weather requests, summaries, or chit-chat. For all standard queries, reply directly in the chat with clean, well-formatted text.\n"
+    "- NEVER generate files (PDF, Word, Excel, CSV, ZIP) automatically for normal questions, searches, weather requests, summaries, code inquiries, or chit-chat. For all standard queries, reply directly in the chat with clean, well-formatted text or code blocks.\n"
     "- ONLY invoke file generation tools (`generate_pdf`, `generate_word`, `generate_excel`, `generate_csv`, `zip_files`) when the user EXPLICITLY commands you to make, create, export, or download a file (e.g. 'make a PDF', 'Word document banao', 'export as Excel', 'download as CSV', 'crear PDF', etc.).\n"
     "- When you generate a file upon user request, give a helpful summary of what was generated in the user's language and ALWAYS include the download link returned by the tool (http://localhost:8000/api/download/<filename>).\n"
-    "- Format text cleanly using markdown bolding, bullet points, headers, and organized sections."
+    "- Format text cleanly using markdown bolding, bullet points, headers, and organized code blocks."
 )
 
 llm = ChatGroq(
