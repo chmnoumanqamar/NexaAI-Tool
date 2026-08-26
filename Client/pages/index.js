@@ -1336,7 +1336,8 @@ export default function Workspace() {
     if (!selectedFile) return null;
     const formData = new FormData();
     formData.append("file", selectedFile);
-    const res = await fetch(`${API_BASE}/api/upload`, { method: "POST", body: formData });
+    const wsParam = workspace?.id ? `?workspace_id=${encodeURIComponent(workspace.id)}` : "";
+    const res = await fetch(`${API_BASE}/api/upload${wsParam}`, { method: "POST", body: formData });
     if (!res.ok) throw new Error("Upload failed");
     return res.json();
   };
@@ -1378,13 +1379,20 @@ export default function Workspace() {
       }
       const updatedWorkspace = { ...workspace, name: promptTitle };
       setWorkspace(updatedWorkspace);
-      if (typeof window !== "undefined") {
+      if (userUsername && typeof window !== "undefined") {
         try {
-          localStorage.setItem("last_active_workspace", JSON.stringify(updatedWorkspace));
+          localStorage.setItem(getLastActiveKey(userUsername), JSON.stringify(updatedWorkspace));
         } catch {}
       }
-      const nextRecents = upsertRecent(updatedWorkspace);
-      setRecents(nextRecents);
+      if (userUsername) {
+        const nextRecents = upsertRecentForUser(userUsername, updatedWorkspace);
+        setRecents(nextRecents);
+        fetch(`${API_BASE}/api/user/${encodeURIComponent(userUsername)}/workspace/add`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(updatedWorkspace),
+        }).catch(() => {});
+      }
     }
     const activeReply = replyingTo; // capture before clearing, so a race can't drop it
     setReplyingTo(null);
