@@ -16,83 +16,24 @@ const SECURITY_QUESTIONS = [
   "What is the name of your best friend?",
   "What was your first pet's name?",
 ];
-const RECENTS_KEY = "workspace_recents_v1";
-const RECENTS_LIMIT = 15;
+const RECENTS_LIMIT = 20;
 
-// Same-hue variations only — no new colors introduced.
-const AVATAR_SHADES = ["#6D8D74", "#C8A96B", "#537059", "#7E9A84", "#B89658", "#8AA690"];
-
-function hashToShade(str) {
-  let h = 0;
-  for (let i = 0; i < str.length; i++) h = str.charCodeAt(i) + ((h << 5) - h);
-  return AVATAR_SHADES[Math.abs(h) % AVATAR_SHADES.length];
+// User-scoped storage helpers: each account has its own isolated recents & active workspace
+function getRecentsKey(username) {
+  return username ? `workspace_recents_${username.toLowerCase().trim()}` : "workspace_recents_guest";
 }
 
-function initials(name) {
-  if (!name) return "?";
-  const parts = name.trim().split(/\s+/);
-  return (parts[0]?.[0] || "").concat(parts[1]?.[0] || "").toUpperCase() || name[0].toUpperCase();
+function getLastActiveKey(username) {
+  return username ? `last_active_workspace_${username.toLowerCase().trim()}` : "last_active_workspace_guest";
 }
 
-function fileMeta(name) {
-  const ext = (name.split(".").pop() || "").toLowerCase();
-  const map = {
-    xlsx: { icon: "📊", label: "Excel" },
-    csv: { icon: "📈", label: "CSV" },
-    pdf: { icon: "📄", label: "PDF" },
-    docx: { icon: "📝", label: "Word" },
-    zip: { icon: "🗂️", label: "Archive" },
-    png: { icon: "🖼️", label: "Image" },
-    jpg: { icon: "🖼️", label: "Image" },
-    jpeg: { icon: "🖼️", label: "Image" },
-    webp: { icon: "🖼️", label: "Image" },
-  };
-  return map[ext] || { icon: "📁", label: ext.toUpperCase() || "File" };
-}
-
-function formatBytes(bytes) {
-  if (!bytes && bytes !== 0) return "";
-  if (bytes < 1024) return `${bytes} B`;
-  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
-  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
-}
-
-function formatTime(ts) {
+function loadRecentsForUser(username) {
+  if (typeof window === "undefined" || !username) return [];
   try {
-    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-  } catch {
-    return "";
-  }
-}
-
-function formatRelative(ts) {
-  try {
-    const diff = Date.now() - new Date(ts).getTime();
-    const min = Math.floor(diff / 60000);
-    if (min < 1) return "just now";
-    if (min < 60) return `${min}m ago`;
-    const hr = Math.floor(min / 60);
-    if (hr < 24) return `${hr}h ago`;
-    const day = Math.floor(hr / 24);
-    return `${day}d ago`;
-  } catch {
-    return "";
-  }
-}
-
-function genId(prefix) {
-  return `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
-}
-
-// ---- Recents (localStorage) ----
-function loadRecents() {
-  if (typeof window === "undefined") return [];
-  try {
-    const raw = localStorage.getItem(RECENTS_KEY);
+    const raw = localStorage.getItem(getRecentsKey(username));
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
-    // Strictly filter out any empty / "New Chat" entries from recents
-    const filtered = parsed.filter(
+    return parsed.filter(
       (r) =>
         r &&
         r.id &&
@@ -101,25 +42,20 @@ function loadRecents() {
         !r.name.startsWith("New Chat") &&
         r.name !== "Untitled Chat"
     );
-    if (filtered.length !== parsed.length) {
-      saveRecents(filtered);
-    }
-    return filtered;
   } catch {
     return [];
   }
 }
 
-function saveRecents(list) {
-  if (typeof window === "undefined") return;
+function saveRecentsForUser(username, list) {
+  if (typeof window === "undefined" || !username) return;
   try {
-    localStorage.setItem(RECENTS_KEY, JSON.stringify(list.slice(0, RECENTS_LIMIT)));
-  } catch {
-    // ignore quota errors
-  }
+    localStorage.setItem(getRecentsKey(username), JSON.stringify((list || []).slice(0, RECENTS_LIMIT)));
+  } catch {}
 }
 
-function upsertRecent(entry) {
+function upsertRecentForUser(username, entry) {
+  if (!username) return [];
   if (
     !entry ||
     !entry.id ||
@@ -128,12 +64,12 @@ function upsertRecent(entry) {
     entry.name.startsWith("New Chat") ||
     entry.name === "Untitled Chat"
   ) {
-    return loadRecents();
+    return loadRecentsForUser(username);
   }
-  const list = loadRecents();
+  const list = loadRecentsForUser(username);
   const filtered = list.filter((r) => r.id !== entry.id);
   const next = [{ ...entry, lastVisited: new Date().toISOString() }, ...filtered];
-  saveRecents(next);
+  saveRecentsForUser(username, next);
   return next;
 }
 
@@ -372,7 +308,9 @@ function MessageContent({ content, isUser, onCopy }) {
 }
 
 export default function Workspace() {
-  const [userName, setUserName] = useState(null);
+  const [userName, setUserName] = useState(null); // Display Name e.g. "Nouman", "aoun"
+  const [userUsername, setUserUsername] = useState(null); // Unique Username e.g. "nouman", "aoun"
+  const [userId, setUserId] = useState("user-temp"); // Deterministic Unique ID e.g. "user-nouman", "user-aoun"
   const [theme, setTheme] = useState("light");
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
@@ -398,15 +336,6 @@ export default function Workspace() {
     }
   };
   const [authChecked, setAuthChecked] = useState(false); // avoids a login-screen flash while restoring a saved session
-  const [userId] = useState(() => {
-    if (typeof window === "undefined") return "user-temp";
-    let id = localStorage.getItem("workspace_user_id");
-    if (!id) {
-      id = "user-" + Math.random().toString(36).slice(2, 10);
-      localStorage.setItem("workspace_user_id", id);
-    }
-    return id;
-  });
 
   // ---- Sign up / log in ----
   const [authMode, setAuthMode] = useState("login"); // "login" | "signup"
@@ -504,63 +433,14 @@ export default function Workspace() {
       const cleanUrl = window.location.pathname;
       window.history.replaceState({}, "", cleanUrl);
     }
-    
-    const initialRecents = loadRecents();
-    setRecents(initialRecents);
-
-    // Push local named projects to server
-    for (const r of initialRecents) {
-      if (r.id && r.name && !r.name.startsWith("Shared Project") && !r.name.startsWith("Project (") && !r.name.startsWith("New Chat")) {
-        fetch(`${API_BASE}/api/workspace`, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: r.id, name: r.name, type: r.type || "project" })
-        }).catch(() => {});
-      }
-    }
-
-    // Auto-sync recent projects with actual names from server
-    fetch(`${API_BASE}/api/workspaces`)
-      .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data) => {
-        if (data?.workspaces) {
-          setRecents((prev) => {
-            let changed = false;
-            const updated = prev.map((r) => {
-              const serverWs = data.workspaces[r.id];
-              if (serverWs && serverWs.name && serverWs.name !== r.name && serverWs.name !== r.id && !serverWs.name.startsWith("Project (") && !serverWs.name.startsWith("Shared Project")) {
-                changed = true;
-                return { ...r, name: serverWs.name, type: serverWs.type || r.type };
-              }
-              return r;
-            });
-            if (changed) {
-              if (typeof window !== "undefined") {
-                localStorage.setItem(RECENTS_KEY, JSON.stringify(updated));
-              }
-              return updated;
-            }
-            return prev;
-          });
-
-          setWorkspace((curr) => {
-            if (curr && data.workspaces[curr.id]) {
-              const sWs = data.workspaces[curr.id];
-              if (sWs.name && sWs.name !== curr.name && sWs.name !== curr.id && !sWs.name.startsWith("Project (") && !sWs.name.startsWith("Shared Project")) {
-                return { ...curr, name: sWs.name };
-              }
-            }
-            return curr;
-          });
-        }
-      })
-      .catch(() => {});
 
     const token = localStorage.getItem("workspace_auth_token");
     if (!token) {
+      setRecents([]);
       setAuthChecked(true);
       return;
     }
+
     fetch(`${API_BASE}/api/auth/me`, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
@@ -568,10 +448,59 @@ export default function Workspace() {
     })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
       .then((data) => {
-        if (data?.user?.name) setUserName(data.user.name);
+        if (data?.user?.username) {
+          const realName = data.user.name;
+          const realUsername = data.user.username.toLowerCase();
+          const realUserId = "user-" + realUsername;
+
+          setUserName(realName);
+          setUserUsername(realUsername);
+          setUserId(realUserId);
+
+          const userRecents = loadRecentsForUser(realUsername);
+          setRecents(userRecents);
+
+          // Push local named projects to server
+          for (const r of userRecents) {
+            if (r.id && r.name && !r.name.startsWith("Shared Project") && !r.name.startsWith("Project (") && !r.name.startsWith("New Chat")) {
+              fetch(`${API_BASE}/api/workspace`, {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ id: r.id, name: r.name, type: r.type || "project", created_by: realUserId })
+              }).catch(() => {});
+            }
+          }
+
+          // Auto-sync user's recent projects with actual names from server
+          fetch(`${API_BASE}/api/workspaces`)
+            .then((res) => (res.ok ? res.json() : Promise.reject()))
+            .then((wData) => {
+              if (wData?.workspaces) {
+                setRecents((prev) => {
+                  let changed = false;
+                  const updated = prev.map((r) => {
+                    const serverWs = wData.workspaces[r.id];
+                    if (serverWs && serverWs.name && serverWs.name !== r.name && serverWs.name !== r.id && !serverWs.name.startsWith("Project (") && !serverWs.name.startsWith("Shared Project")) {
+                      changed = true;
+                      return { ...r, name: serverWs.name, type: serverWs.type || r.type };
+                    }
+                    return r;
+                  });
+                  if (changed) {
+                    saveRecentsForUser(realUsername, updated);
+                    return updated;
+                  }
+                  return prev;
+                });
+              }
+            })
+            .catch(() => {});
+        }
       })
       .catch(() => {
         localStorage.removeItem("workspace_auth_token");
+        localStorage.removeItem("workspace_active_username");
+        setRecents([]);
       })
       .finally(() => setAuthChecked(true));
   }, []);
@@ -579,7 +508,7 @@ export default function Workspace() {
   // ---- Route through the wizard once auth / join-link state is known ----
   useEffect(() => {
     if (!authChecked) return;
-    if (!userName) {
+    if (!userName || !userUsername) {
       setStep("auth");
       return;
     }
@@ -591,7 +520,7 @@ export default function Workspace() {
     if (step === "auth" || !workspace) {
       let restoredWs = null;
       try {
-        const lastSaved = localStorage.getItem("last_active_workspace");
+        const lastSaved = localStorage.getItem(getLastActiveKey(userUsername));
         if (lastSaved) {
           const parsed = JSON.parse(lastSaved);
           if (parsed && parsed.id) {
@@ -601,7 +530,7 @@ export default function Workspace() {
       } catch {}
 
       if (!restoredWs) {
-        const currentRecents = loadRecents();
+        const currentRecents = loadRecentsForUser(userUsername);
         if (currentRecents.length > 0) {
           restoredWs = currentRecents[0];
         }
@@ -613,12 +542,12 @@ export default function Workspace() {
         startNewChat();
       }
     }
-  }, [userName, pendingJoinId, authChecked]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [userName, userUsername, pendingJoinId, authChecked]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doSignup = async () => {
     setAuthError("");
     const name = authName.trim();
-    const username = authUsername.trim();
+    const username = authUsername.trim().toLowerCase();
     const age = Number(authAge);
     const securityAnswer = authSecurityAnswer.trim();
     if (!name || !username || !authPassword || !authAge) {
@@ -649,8 +578,34 @@ export default function Workspace() {
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.detail || "Sign up failed.");
+
+      const realName = data.user.name;
+      const realUsername = data.user.username.toLowerCase();
+      const realUserId = "user-" + realUsername;
+
       localStorage.setItem("workspace_auth_token", data.token);
-      setUserName(data.user.name);
+      localStorage.setItem("workspace_active_username", realUsername);
+
+      setUserName(realName);
+      setUserUsername(realUsername);
+      setUserId(realUserId);
+
+      // BRAND NEW USER IS ALWAYS 100% CLEAN & BLANK
+      setRecents([]);
+      saveRecentsForUser(realUsername, []);
+      localStorage.removeItem(getLastActiveKey(realUsername));
+
+      setMessages([]);
+      setTeamThreads([]);
+      setBranches([]);
+
+      if (pendingJoinId) {
+        setJoinDraft(pendingJoinId);
+        setStep("joinProject");
+      } else {
+        const id = genId("chat");
+        enterWorkspace({ id, name: "New Chat", type: "personal" });
+      }
     } catch (err) {
       setAuthError(String(err?.message || err));
     } finally {
@@ -660,7 +615,8 @@ export default function Workspace() {
 
   const doLogin = async () => {
     setAuthError("");
-    if (!authUsername.trim() || !authPassword) {
+    const username = authUsername.trim().toLowerCase();
+    if (!username || !authPassword) {
       setAuthError("Username and password are required.");
       return;
     }
@@ -669,12 +625,54 @@ export default function Workspace() {
       const res = await fetch(`${API_BASE}/api/auth/login`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ username: authUsername.trim(), password: authPassword }),
+        body: JSON.stringify({ username, password: authPassword }),
       });
       const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data?.detail || "Login failed.");
+
+      const realName = data.user.name;
+      const realUsername = data.user.username.toLowerCase();
+      const realUserId = "user-" + realUsername;
+
       localStorage.setItem("workspace_auth_token", data.token);
-      setUserName(data.user.name);
+      localStorage.setItem("workspace_active_username", realUsername);
+
+      setUserName(realName);
+      setUserUsername(realUsername);
+      setUserId(realUserId);
+
+      // Load ONLY this user's recents
+      const userRecents = loadRecentsForUser(realUsername);
+      setRecents(userRecents);
+
+      setMessages([]);
+      setTeamThreads([]);
+      setBranches([]);
+
+      if (pendingJoinId) {
+        setJoinDraft(pendingJoinId);
+        setStep("joinProject");
+      } else {
+        let restoredWs = null;
+        try {
+          const lastSaved = localStorage.getItem(getLastActiveKey(realUsername));
+          if (lastSaved) {
+            const parsed = JSON.parse(lastSaved);
+            if (parsed && parsed.id) restoredWs = parsed;
+          }
+        } catch {}
+
+        if (!restoredWs && userRecents.length > 0) {
+          restoredWs = userRecents[0];
+        }
+
+        if (restoredWs) {
+          enterWorkspace(restoredWs);
+        } else {
+          const id = genId("chat");
+          enterWorkspace({ id, name: "New Chat", type: "personal" });
+        }
+      }
     } catch (err) {
       setAuthError(String(err?.message || err));
     } finally {
@@ -685,9 +683,15 @@ export default function Workspace() {
   const signOut = async () => {
     const token = localStorage.getItem("workspace_auth_token");
     localStorage.removeItem("workspace_auth_token");
+    localStorage.removeItem("workspace_active_username");
     setUserName(null);
+    setUserUsername(null);
+    setUserId("user-temp");
     setWorkspace(null);
+    setRecents([]);
     setMessages([]);
+    setTeamThreads([]);
+    setBranches([]);
     setAuthName("");
     setAuthUsername("");
     setAuthPassword("");
@@ -813,19 +817,20 @@ export default function Workspace() {
     setTeamThreads([]);
     setBranches([]);
 
-    if (typeof window !== "undefined") {
+    if (userUsername && typeof window !== "undefined") {
       try {
-        localStorage.setItem("last_active_workspace", JSON.stringify(entry));
+        localStorage.setItem(getLastActiveKey(userUsername), JSON.stringify(entry));
       } catch {}
     }
 
     if (
+      userUsername &&
       entry.name &&
       entry.name !== "New Chat" &&
       !entry.name.startsWith("New Chat") &&
       entry.name !== "Untitled Chat"
     ) {
-      const next = upsertRecent(entry);
+      const next = upsertRecentForUser(userUsername, entry);
       setRecents(next);
     }
     setStep("active");
@@ -838,18 +843,18 @@ export default function Workspace() {
           if (d?.workspace?.name && d.workspace.name !== entry.id && !d.workspace.name.startsWith("Project (") && !d.workspace.name.startsWith("Shared Project")) {
             const actualName = d.workspace.name;
             setWorkspace((w) => (w?.id === entry.id ? { ...w, name: actualName } : w));
-            setRecents((prev) => {
-              const updated = prev.map((r) => (r.id === entry.id ? { ...r, name: actualName } : r));
-              if (typeof window !== "undefined") {
-                localStorage.setItem(RECENTS_KEY, JSON.stringify(updated));
-              }
-              return updated;
-            });
+            if (userUsername) {
+              setRecents((prev) => {
+                const updated = prev.map((r) => (r.id === entry.id ? { ...r, name: actualName } : r));
+                saveRecentsForUser(userUsername, updated);
+                return updated;
+              });
+            }
           }
         })
         .catch(() => {});
     }
-  }, [userId, userName]);
+  }, [userId, userName, userUsername]);
 
   // ---- Refresh the list of team members' threads + branches ----
   const refreshThreads = useCallback(async () => {
@@ -982,8 +987,8 @@ export default function Workspace() {
     const deleteRecentChat = (chatId) => {
     const next = recents.filter((r) => r.id !== chatId);
     setRecents(next);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+    if (userUsername) {
+      saveRecentsForUser(userUsername, next);
     }
     if (workspace?.id === chatId) {
       if (next.length > 0) {
@@ -1013,8 +1018,8 @@ export default function Workspace() {
     }
     const next = recents.map((r) => (r.id === chatId ? { ...r, name: trimmed } : r));
     setRecents(next);
-    if (typeof window !== "undefined") {
-      localStorage.setItem(RECENTS_KEY, JSON.stringify(next));
+    if (userUsername) {
+      saveRecentsForUser(userUsername, next);
     }
     if (workspace?.id === chatId) {
       setWorkspace((prev) => ({ ...prev, name: trimmed }));
