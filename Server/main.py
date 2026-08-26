@@ -37,24 +37,37 @@ os.makedirs(UPLOAD_DIR, exist_ok=True)
 # Accounts are stored in a local JSON file next to this script — no extra
 # database setup needed. Passwords are never stored in plain text.
 USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.json")
+import threading
+
 WORKSPACES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspaces.json")
+_WS_LOCK = threading.Lock()
+WORKSPACE_REGISTRY: dict[str, dict] = {}
+
+def _init_workspace_registry():
+    global WORKSPACE_REGISTRY
+    if os.path.exists(WORKSPACES_FILE):
+        try:
+            with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    WORKSPACE_REGISTRY.update(data)
+        except Exception as e:
+            print(f"Notice loading workspaces.json: {e}")
+
+_init_workspace_registry()
+
+def _save_workspaces_atomic():
+    with _WS_LOCK:
+        try:
+            temp_file = WORKSPACES_FILE + ".tmp"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(WORKSPACE_REGISTRY, f, indent=2)
+            os.replace(temp_file, WORKSPACES_FILE)
+        except Exception as e:
+            print(f"Error saving workspaces: {e}")
+
 SESSIONS: dict[str, str] = {}  # token -> username (in-memory; resets if the server restarts)
 IN_MEMORY_THREAD_HISTORY: dict[str, list] = {}  # "workspace_thread" -> list of {role, content}
-
-
-def _load_workspaces() -> dict:
-    if not os.path.exists(WORKSPACES_FILE):
-        return {}
-    try:
-        with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception:
-        return {}
-
-
-def _save_workspaces(workspaces: dict) -> None:
-    with open(WORKSPACES_FILE, "w", encoding="utf-8") as f:
-        json.dump(workspaces, f, indent=2)
 
 
 def _load_users() -> dict:
@@ -550,15 +563,20 @@ def save_workspace(request: WorkspaceSaveRequest):
     if not ws_id or not ws_name:
         raise HTTPException(status_code=400, detail="Workspace ID and Name are required.")
     
-    all_ws = _load_workspaces()
-    all_ws[ws_id] = {
+    # Protect against overwriting real names with generic fallback placeholders
+    is_placeholder = ws_name.startswith("Project (") or ws_name.startswith("Shared Project")
+    existing = WORKSPACE_REGISTRY.get(ws_id)
+    if existing and existing.get("name") and is_placeholder:
+        return {"status": "success", "workspace": existing}
+    
+    WORKSPACE_REGISTRY[ws_id] = {
         "id": ws_id,
         "name": ws_name,
         "type": request.type,
         "created_by": request.created_by,
         "updated_at": time.time()
     }
-    _save_workspaces(all_ws)
+    _save_workspaces_atomic()
     
     if supabase:
         try:
@@ -571,22 +589,26 @@ def save_workspace(request: WorkspaceSaveRequest):
         except Exception as e:
             print(f"Supabase workspace save notice: {e}")
             
-    return {"status": "success", "workspace": all_ws[ws_id]}
+    return {"status": "success", "workspace": WORKSPACE_REGISTRY[ws_id]}
 
 @app.get("/api/workspace/{workspace_id}/meta")
 @app.get("/api/workspace/{workspace_id}/info")
+@app.get("/api/workspace/{workspace_id}")
 def get_workspace_meta(workspace_id: str):
-    all_ws = _load_workspaces()
-    if workspace_id in all_ws:
-        return {"status": "success", "workspace": all_ws[workspace_id]}
+    if workspace_id in WORKSPACE_REGISTRY:
+        return {"status": "success", "workspace": WORKSPACE_REGISTRY[workspace_id]}
+    
+    for key, val in WORKSPACE_REGISTRY.items():
+        if key.endswith(workspace_id) or workspace_id.endswith(key.replace("proj-", "")):
+            return {"status": "success", "workspace": val}
     
     if supabase:
         try:
             res = supabase.table("workspaces").select("*").eq("id", workspace_id).execute()
             if res.data and len(res.data) > 0:
                 ws_data = res.data[0]
-                all_ws[workspace_id] = ws_data
-                _save_workspaces(all_ws)
+                WORKSPACE_REGISTRY[workspace_id] = ws_data
+                _save_workspaces_atomic()
                 return {"status": "success", "workspace": ws_data}
         except Exception as e:
             print(f"Supabase workspace get notice: {e}")
@@ -595,16 +617,16 @@ def get_workspace_meta(workspace_id: str):
 
 @app.get("/api/workspaces")
 def list_all_workspaces():
-    all_ws = _load_workspaces()
     if supabase:
         try:
             res = supabase.table("workspaces").select("*").execute()
             for r in (res.data or []):
-                if r.get("id"):
-                    all_ws[r["id"]] = r
+                if r.get("id") and r.get("name"):
+                    if not (r["name"].startswith("Project (") or r["name"].startswith("Shared Project")):
+                        WORKSPACE_REGISTRY[r["id"]] = r
         except Exception as e:
             print(f"Supabase workspaces list notice: {e}")
-    return {"status": "success", "workspaces": all_ws}
+    return {"status": "success", "workspaces": WORKSPACE_REGISTRY}
 
 @app.post("/api/notifications/read")
 def mark_notification_read(request: NotificationReadRequest):

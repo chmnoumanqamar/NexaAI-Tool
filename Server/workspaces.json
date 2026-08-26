@@ -1,45 +1,44 @@
 {
-  "chat-w72a5h05kz": {
-    "id": "chat-w72a5h05kz",
-    "name": "what is the capital of france",
-    "type": "personal",
+  "proj-e53a9wb1i5": {
+    "id": "proj-e53a9wb1i5",
+    "name": "teacher",
+    "type": "project",
     "created_by": null,
-    "updated_at": 1787672936.068697
-  },
-  "personal-user-1qjc7upi": {
-    "id": "personal-user-1qjc7upi",
-    "name": "Ali's Chat",
-    "type": "personal",
-    "created_by": null,
-    "updated_at": 1787672043.641666
+    "updated_at": 1787673903.8932748
   },
   "proj-mxpveqakzw": {
     "id": "proj-mxpveqakzw",
     "name": "student",
     "type": "project",
     "created_by": null,
-    "updated_at": 1787672795.4441051
+    "updated_at": 1787673903.9063551
+  },
+  "personal-user-3do5r9so": {
+    "id": "personal-user-3do5r9so",
+    "name": "Nouman's Chat",
+    "type": "personal",
+    "created_by": null,
+    "updated_at": 1787673880.693321
+  },
+  "chat-w72a5h05kz": {
+    "id": "chat-w72a5h05kz",
+    "name": "what is the capital of france",
+    "type": "personal",
+    "created_by": null,
+    "updated_at": 1787673880.7097569
+  },
+  "personal-user-ikc35ckq": {
+    "id": "personal-user-ikc35ckq",
+    "name": "Nouman's Chat",
+    "type": "personal",
+    "created_by": null,
+    "updated_at": 1787673903.9113593
   },
   "chat-2v1w7x1yrs": {
     "id": "chat-2v1w7x1yrs",
     "name": "give me code for the make a portfoli\u2026",
     "type": "personal",
     "created_by": null,
-    "updated_at": 1787672795.4888554
-  },
-  "proj-e53a9wb1i5": {
-    "id": "proj-e53a9wb1i5",
-    "name": "teacher",
-    "type": "project",
-    "created_by": "user-ikc35ckq",
-    "updated_at": 1787672930.9135063
-  }
-}
-  "personal-user-3do5r9so": {
-    "id": "personal-user-3do5r9so",
-    "name": "Nouman's Chat",
-    "type": "personal",
-    "created_by": null,
-    "updated_at": 1787672936.068011
+    "updated_at": 1787673903.9205234
   }
 }

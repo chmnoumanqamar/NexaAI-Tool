@@ -137,20 +137,30 @@ function upsertRecent(entry) {
   return next;
 }
 
-// Parse a pasted invite link or raw workspace id into a clean id
-function parseWorkspaceInput(raw) {
+// Parse a pasted invite link or raw workspace id into clean id + name
+function parseWorkspaceDetails(raw) {
   const trimmed = (raw || "").trim();
-  if (!trimmed) return "";
+  if (!trimmed) return { id: "", name: "" };
   try {
     if (trimmed.includes("://") || trimmed.startsWith("localhost")) {
       const url = new URL(trimmed.includes("://") ? trimmed : `http://${trimmed}`);
       const fromQuery = url.searchParams.get("join");
-      if (fromQuery) return fromQuery.trim();
+      const nameQuery = url.searchParams.get("name");
+      if (fromQuery) {
+        return {
+          id: fromQuery.trim(),
+          name: nameQuery ? decodeURIComponent(nameQuery.trim()) : "",
+        };
+      }
     }
   } catch {
     // not a URL, fall through
   }
-  return trimmed.replace(/\s+/g, "");
+  return { id: trimmed.replace(/\s+/g, ""), name: "" };
+}
+
+function parseWorkspaceInput(raw) {
+  return parseWorkspaceDetails(raw).id;
 }
 
 // ---- Lightweight, Safe Markdown & List Renderer ----
@@ -930,28 +940,34 @@ export default function Workspace() {
   };
 
   const joinProject = async () => {
-    const id = parseWorkspaceInput(joinDraft);
+    const { id, name: parsedName } = parseWorkspaceDetails(joinDraft);
     if (!id) {
       setJoinError("Paste an invite link or workspace ID first.");
       return;
     }
     
-    let resolvedName = pendingJoinName || null;
-    if (!resolvedName) {
-      const existing = recents.find((r) => r.id === id);
-      if (existing?.name && !existing.name.startsWith("Shared Project")) {
-        resolvedName = existing.name;
-      }
+    let resolvedName = parsedName || pendingJoinName || null;
+    if (resolvedName && (resolvedName.startsWith("Project (") || resolvedName.startsWith("Shared Project"))) {
+      resolvedName = null;
     }
 
     if (!resolvedName) {
       try {
         const res = await fetch(`${API_BASE}/api/workspace/${encodeURIComponent(id)}/meta`);
-        const data = await res.json();
-        if (data?.workspace?.name && data.workspace.name !== id) {
-          resolvedName = data.workspace.name;
+        if (res.ok) {
+          const data = await res.json();
+          if (data?.workspace?.name && data.workspace.name !== id && !data.workspace.name.startsWith("Project (") && !data.workspace.name.startsWith("Shared Project")) {
+            resolvedName = data.workspace.name;
+          }
         }
       } catch {}
+    }
+
+    if (!resolvedName) {
+      const existing = recents.find((r) => r.id === id);
+      if (existing?.name && !existing.name.startsWith("Project (") && !existing.name.startsWith("Shared Project")) {
+        resolvedName = existing.name;
+      }
     }
 
     const finalName = resolvedName || `Project (${id.slice(-6)})`;
