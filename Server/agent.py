@@ -21,6 +21,39 @@ load_dotenv()
 UPLOAD_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "secure_uploads")
 os.makedirs(UPLOAD_DIR, exist_ok=True)
 
+_CURRENT_WORKSPACE_ID: str | None = None
+
+def set_current_workspace(ws_id: str | None):
+    global _CURRENT_WORKSPACE_ID
+    _CURRENT_WORKSPACE_ID = ws_id
+
+def get_upload_dir() -> str:
+    if _CURRENT_WORKSPACE_ID:
+        ws_path = os.path.join(UPLOAD_DIR, _CURRENT_WORKSPACE_ID)
+        os.makedirs(ws_path, exist_ok=True)
+        return ws_path
+    return UPLOAD_DIR
+
+def get_download_url(filename: str) -> str:
+    safe_fn = os.path.basename(filename)
+    if _CURRENT_WORKSPACE_ID:
+        return f"http://localhost:8000/api/download/{safe_fn}?workspace_id={_CURRENT_WORKSPACE_ID}"
+    return f"http://localhost:8000/api/download/{safe_fn}"
+
+def find_file_in_workspace(filename: str) -> str | None:
+    safe_fn = os.path.basename(filename)
+    if _CURRENT_WORKSPACE_ID:
+        ws_fp = os.path.join(UPLOAD_DIR, _CURRENT_WORKSPACE_ID, safe_fn)
+        if os.path.exists(ws_fp):
+            return ws_fp
+    root_fp = os.path.join(UPLOAD_DIR, safe_fn)
+    if os.path.exists(root_fp):
+        return root_fp
+    for root, _, files in os.walk(UPLOAD_DIR):
+        if safe_fn in files:
+            return os.path.join(root, safe_fn)
+    return None
+
 groq_api_key = os.getenv("GROQ_API_KEY", "")
 groq_client = Groq(api_key=groq_api_key) if groq_api_key else None
 
@@ -228,10 +261,11 @@ def generate_excel(data_json: str, filename: str) -> str:
             df = pd.DataFrame(parsed)
         else:
             df = pd.DataFrame([{"Content": str(parsed)}])
-        out_path = os.path.join(UPLOAD_DIR, fn)
+        out_path = os.path.join(get_upload_dir(), fn)
         with pd.ExcelWriter(out_path, engine="openpyxl") as writer:
             df.to_excel(writer, index=False, sheet_name="Sheet1")
-        return f"✅ Excel spreadsheet '{fn}' generated successfully! Download Link: http://localhost:8000/api/download/{fn}"
+        dl = get_download_url(fn)
+        return f"✅ Excel spreadsheet '{fn}' generated successfully! Download Link: {dl}"
     except Exception as e:
         return f"Error generating Excel file: {str(e)}"
 
@@ -248,9 +282,10 @@ def generate_csv(data_json: str, filename: str) -> str:
         fn = filename if filename.lower().endswith(".csv") else f"{filename}.csv"
         parsed = json.loads(data_json) if isinstance(data_json, str) else data_json
         df = pd.DataFrame(parsed)
-        out_path = os.path.join(UPLOAD_DIR, fn)
+        out_path = os.path.join(get_upload_dir(), fn)
         df.to_csv(out_path, index=False, encoding="utf-8")
-        return f"✅ CSV file '{fn}' generated successfully! Download Link: http://localhost:8000/api/download/{fn}"
+        dl = get_download_url(fn)
+        return f"✅ CSV file '{fn}' generated successfully! Download Link: {dl}"
     except Exception as e:
         return f"Error generating CSV file: {str(e)}"
 
@@ -264,7 +299,7 @@ def generate_pdf(text: str, filename: str) -> str:
     CRITICAL: ONLY invoke when the user EXPLICITLY asks to create, export, or download a PDF document."""
     try:
         fn = filename if filename.lower().endswith(".pdf") else f"{filename}.pdf"
-        out_path = os.path.join(UPLOAD_DIR, fn)
+        out_path = os.path.join(get_upload_dir(), fn)
         pdf = canvas.Canvas(out_path)
         pdf.setTitle(fn.replace(".pdf", "").replace("_", " ").title())
         
@@ -321,16 +356,17 @@ def generate_pdf(text: str, filename: str) -> str:
                         current_line = w
                     else:
                         current_line = test_line
-                if current_line:
-                    if y < 60:
-                        pdf.showPage()
-                        y = 750
-                        pdf.setFont("Helvetica", 10.5)
-                    pdf.drawString(margin_left, y, current_line)
-                    y -= line_height
+                    if current_line:
+                        if y < 60:
+                            pdf.showPage()
+                            y = 750
+                            pdf.setFont("Helvetica", 10.5)
+                        pdf.drawString(margin_left, y, current_line)
+                        y -= line_height
 
         pdf.save()
-        return f"✅ PDF document '{fn}' generated successfully! Download Link: http://localhost:8000/api/download/{fn}"
+        dl = get_download_url(fn)
+        return f"✅ PDF document '{fn}' generated successfully! Download Link: {dl}"
     except Exception as e:
         return f"Error generating PDF document: {str(e)}"
 
@@ -344,7 +380,7 @@ def generate_word(text: str, filename: str) -> str:
     CRITICAL: ONLY invoke when the user EXPLICITLY asks to create, export, or download a Word document (.docx)."""
     try:
         fn = filename if filename.lower().endswith(".docx") else f"{filename}.docx"
-        out_path = os.path.join(UPLOAD_DIR, fn)
+        out_path = os.path.join(get_upload_dir(), fn)
         doc = Document()
         doc_title = fn.replace(".docx", "").replace("_", " ").title()
         doc.add_heading(doc_title, level=0)
@@ -368,7 +404,8 @@ def generate_word(text: str, filename: str) -> str:
                 doc.add_paragraph(p_text)
 
         doc.save(out_path)
-        return f"✅ Word document '{fn}' generated successfully! Download Link: http://localhost:8000/api/download/{fn}"
+        dl = get_download_url(fn)
+        return f"✅ Word document '{fn}' generated successfully! Download Link: {dl}"
     except Exception as e:
         return f"Error generating Word document: {str(e)}"
 
@@ -383,22 +420,23 @@ def zip_files(filenames_json: str, zip_filename: str) -> str:
     CRITICAL: ONLY invoke when the user EXPLICITLY asks to zip or bundle files."""
     try:
         fn = zip_filename if zip_filename.lower().endswith(".zip") else f"{zip_filename}.zip"
-        zip_path = os.path.join(UPLOAD_DIR, fn)
+        zip_path = os.path.join(get_upload_dir(), fn)
         filenames = json.loads(filenames_json) if isinstance(filenames_json, str) else filenames_json
         found = []
         missing = []
         with zipfile.ZipFile(zip_path, "w") as zf:
             for name in filenames:
-                fp = os.path.join(UPLOAD_DIR, name)
-                if os.path.exists(fp):
+                fp = find_file_in_workspace(name)
+                if fp and os.path.exists(fp):
                     zf.write(fp, arcname=name)
                     found.append(name)
                 else:
                     missing.append(name)
+        dl = get_download_url(fn)
         msg = f"✅ ZIP archive '{fn}' created with {len(found)} file(s)."
         if missing:
             msg += f" (Missing: {', '.join(missing)})."
-        msg += f" Download Link: http://localhost:8000/api/download/{fn}"
+        msg += f" Download Link: {dl}"
         return msg
     except Exception as e:
         return f"Error creating ZIP archive: {str(e)}"
@@ -414,8 +452,8 @@ def analyze_uploaded_image(image_filename: str, question: str = "Describe this i
     if not groq_client:
         return "Groq client not configured with API key."
     try:
-        image_path = os.path.join(UPLOAD_DIR, image_filename)
-        if not os.path.exists(image_path):
+        image_path = find_file_in_workspace(image_filename)
+        if not image_path or not os.path.exists(image_path):
             return f"Image '{image_filename}' not found in uploads directory. Please ensure it was uploaded."
         with open(image_path, "rb") as f:
             b64_img = base64.b64encode(f.read()).decode("utf-8")
@@ -444,7 +482,8 @@ def list_workspace_files() -> str:
     """Lists all files currently available in the workspace (uploaded files, generated PDFs, Excel sheets, Word docs, etc.).
     Use this when the user asks what files exist or refers to previous files."""
     try:
-        files = [f for f in os.listdir(UPLOAD_DIR) if not f.startswith(".") and f.lower() != ".gitkeep"]
+        target_dir = get_upload_dir()
+        files = [f for f in os.listdir(target_dir) if not f.startswith(".") and f.lower() != ".gitkeep"]
         if not files:
             return "No files currently uploaded or generated in this workspace."
         return f"Files available in workspace: {', '.join(files)}"
@@ -460,8 +499,8 @@ def read_workspace_file(filename: str) -> str:
     Use this when user asks to read, inspect, or summarize a text/code/csv file in the workspace."""
     try:
         safe_fn = os.path.basename(filename)
-        path = os.path.join(UPLOAD_DIR, safe_fn)
-        if not os.path.exists(path):
+        path = find_file_in_workspace(safe_fn)
+        if not path or not os.path.exists(path):
             return f"File '{safe_fn}' not found in workspace."
         with open(path, "r", encoding="utf-8", errors="ignore") as f:
             content = f.read(6000)

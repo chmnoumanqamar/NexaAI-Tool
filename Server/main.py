@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from supabase import create_client, Client
 from dotenv import load_dotenv
+import agent as agent_module
 from agent import agent
 
 load_dotenv()
@@ -40,11 +41,13 @@ USERS_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "users.jso
 import threading
 
 WORKSPACES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "workspaces.json")
+USER_WORKSPACES_FILE = os.path.join(os.path.dirname(os.path.abspath(__file__)), "user_workspaces.json")
 _WS_LOCK = threading.Lock()
 WORKSPACE_REGISTRY: dict[str, dict] = {}
+USER_WORKSPACES: dict[str, list[dict]] = {}
 
 def _init_workspace_registry():
-    global WORKSPACE_REGISTRY
+    global WORKSPACE_REGISTRY, USER_WORKSPACES
     if os.path.exists(WORKSPACES_FILE):
         try:
             with open(WORKSPACES_FILE, "r", encoding="utf-8") as f:
@@ -53,6 +56,14 @@ def _init_workspace_registry():
                     WORKSPACE_REGISTRY.update(data)
         except Exception as e:
             print(f"Notice loading workspaces.json: {e}")
+    if os.path.exists(USER_WORKSPACES_FILE):
+        try:
+            with open(USER_WORKSPACES_FILE, "r", encoding="utf-8") as f:
+                data = json.load(f)
+                if isinstance(data, dict):
+                    USER_WORKSPACES.update(data)
+        except Exception as e:
+            print(f"Notice loading user_workspaces.json: {e}")
 
 _init_workspace_registry()
 
@@ -65,6 +76,16 @@ def _save_workspaces_atomic():
             os.replace(temp_file, WORKSPACES_FILE)
         except Exception as e:
             print(f"Error saving workspaces: {e}")
+
+def _save_user_workspaces_atomic():
+    with _WS_LOCK:
+        try:
+            temp_file = USER_WORKSPACES_FILE + ".tmp"
+            with open(temp_file, "w", encoding="utf-8") as f:
+                json.dump(USER_WORKSPACES, f, indent=2)
+            os.replace(temp_file, USER_WORKSPACES_FILE)
+        except Exception as e:
+            print(f"Error saving user workspaces: {e}")
 
 SESSIONS: dict[str, str] = {}  # token -> username (in-memory; resets if the server restarts)
 IN_MEMORY_THREAD_HISTORY: dict[str, list] = {}  # "workspace_thread" -> list of {role, content}
@@ -221,6 +242,10 @@ def signup(request: SignupRequest):
     }
     _save_users(users)
 
+    # Initialize clean, blank workspaces for newly created user
+    USER_WORKSPACES[username] = []
+    _save_user_workspaces_atomic()
+
     token = secrets.token_hex(24)
     SESSIONS[token] = username
     return {"status": "success", "token": token, "user": _public_user(users[username])}
@@ -295,17 +320,25 @@ def logout(request: TokenRequest):
 
 # Upload a file (image, PDF, excel, csv, etc.)
 @app.post("/api/upload")
-async def upload_file(file: UploadFile = File(...)):
+async def upload_file(file: UploadFile = File(...), workspace_id: str | None = None):
     try:
         # Sanitize filename
         safe_filename = os.path.basename(file.filename)
-        file_location = os.path.join(UPLOAD_DIR, safe_filename)
+        if workspace_id:
+            target_dir = os.path.join(UPLOAD_DIR, workspace_id)
+            os.makedirs(target_dir, exist_ok=True)
+            file_location = os.path.join(target_dir, safe_filename)
+            dl_url = f"http://localhost:8000/api/download/{safe_filename}?workspace_id={workspace_id}"
+        else:
+            file_location = os.path.join(UPLOAD_DIR, safe_filename)
+            dl_url = f"http://localhost:8000/api/download/{safe_filename}"
+
         with open(file_location, "wb") as buffer:
             shutil.copyfileobj(file.file, buffer)
         return {
             "status": "success",
             "filename": safe_filename,
-            "download_url": f"http://localhost:8000/api/download/{safe_filename}",
+            "download_url": dl_url,
             "message": f"File '{safe_filename}' uploaded successfully."
         }
     except Exception as e:
@@ -313,10 +346,23 @@ async def upload_file(file: UploadFile = File(...)):
 
 # Download a generated or uploaded file
 @app.get("/api/download/{filename}")
-async def download_file(filename: str):
+async def download_file(filename: str, workspace_id: str | None = None):
     safe_filename = os.path.basename(filename)
-    file_path = os.path.join(UPLOAD_DIR, safe_filename)
-    if not os.path.exists(file_path):
+    file_path = None
+    if workspace_id:
+        p = os.path.join(UPLOAD_DIR, workspace_id, safe_filename)
+        if os.path.exists(p):
+            file_path = p
+    if not file_path:
+        p = os.path.join(UPLOAD_DIR, safe_filename)
+        if os.path.exists(p):
+            file_path = p
+    if not file_path:
+        for root, _, files in os.walk(UPLOAD_DIR):
+            if safe_filename in files:
+                file_path = os.path.join(root, safe_filename)
+                break
+    if not file_path or not os.path.exists(file_path):
         raise HTTPException(status_code=404, detail=f"File '{safe_filename}' not found in storage.")
     
     # Map common MIME types
@@ -344,21 +390,25 @@ async def download_file(filename: str):
 
 # List files in workspace
 @app.get("/api/files")
-def list_files():
+def list_files(workspace_id: str | None = None):
     try:
-        files = os.listdir(UPLOAD_DIR)
         file_details = []
-        for f in files:
-            if f.startswith(".") or f.lower() == ".gitkeep":
-                continue
-            fp = os.path.join(UPLOAD_DIR, f)
-            if os.path.isfile(fp):
-                file_details.append({
-                    "name": f,
-                    "size": os.path.getsize(fp),
-                    "download_url": f"http://localhost:8000/api/download/{f}"
-                })
-        return {"files": file_details}
+        if workspace_id:
+            ws_dir = os.path.join(UPLOAD_DIR, workspace_id)
+            if os.path.exists(ws_dir) and os.path.isdir(ws_dir):
+                for f in os.listdir(ws_dir):
+                    if f.startswith(".") or f.lower() == ".gitkeep":
+                        continue
+                    fp = os.path.join(ws_dir, f)
+                    if os.path.isfile(fp):
+                        file_details.append({
+                            "name": f,
+                            "size": os.path.getsize(fp),
+                            "download_url": f"http://localhost:8000/api/download/{f}?workspace_id={workspace_id}"
+                        })
+            return {"files": file_details}
+        else:
+            return {"files": []}
     except Exception as e:
         return {"files": [], "error": str(e)}
 
@@ -628,6 +678,48 @@ def list_all_workspaces():
             print(f"Supabase workspaces list notice: {e}")
     return {"status": "success", "workspaces": WORKSPACE_REGISTRY}
 
+# User-specific workspaces endpoints
+@app.get("/api/user/{username}/workspaces")
+def get_user_workspaces(username: str):
+    u = username.strip().lower()
+    workspaces = USER_WORKSPACES.get(u, [])
+    return {"status": "success", "workspaces": workspaces}
+
+class UserWorkspacesSaveRequest(BaseModel):
+    workspaces: list[dict]
+
+@app.post("/api/user/{username}/workspaces")
+def save_user_workspaces(username: str, request: UserWorkspacesSaveRequest):
+    u = username.strip().lower()
+    USER_WORKSPACES[u] = request.workspaces
+    _save_user_workspaces_atomic()
+    return {"status": "success", "workspaces": USER_WORKSPACES[u]}
+
+@app.post("/api/user/{username}/workspace/add")
+def add_user_workspace(username: str, ws: dict):
+    u = username.strip().lower()
+    ws_id = ws.get("id")
+    if not ws_id:
+        raise HTTPException(status_code=400, detail="Workspace id required")
+    current = USER_WORKSPACES.get(u, [])
+    # Remove existing entry with same id if any, then prepend
+    updated = [w for w in current if w.get("id") != ws_id]
+    updated.insert(0, ws)
+    USER_WORKSPACES[u] = updated[:30]
+    _save_user_workspaces_atomic()
+    return {"status": "success", "workspaces": USER_WORKSPACES[u]}
+
+@app.post("/api/user/{username}/workspace/remove")
+def remove_user_workspace(username: str, payload: dict):
+    u = username.strip().lower()
+    ws_id = payload.get("id")
+    if not ws_id:
+        raise HTTPException(status_code=400, detail="Workspace id required")
+    current = USER_WORKSPACES.get(u, [])
+    USER_WORKSPACES[u] = [w for w in current if w.get("id") != ws_id]
+    _save_user_workspaces_atomic()
+    return {"status": "success", "workspaces": USER_WORKSPACES[u]}
+
 @app.post("/api/notifications/read")
 def mark_notification_read(request: NotificationReadRequest):
     if supabase:
@@ -642,6 +734,10 @@ def mark_notification_read(request: NotificationReadRequest):
 async def send_message(request: ChatRequest):
     display_user = request.user_name if request.user_name else request.user_id
     thread_id = request.thread_id or f"member-{request.user_id}"
+
+    # Set workspace context for agent file generation and tools
+    if hasattr(agent_module, "set_current_workspace"):
+        agent_module.set_current_workspace(request.workspace_id)
 
     # Save user message to Supabase
     if supabase:

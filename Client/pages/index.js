@@ -16,7 +16,73 @@ const SECURITY_QUESTIONS = [
   "What is the name of your best friend?",
   "What was your first pet's name?",
 ];
+
 const RECENTS_LIMIT = 20;
+
+// Same-hue variations only — no new colors introduced.
+const AVATAR_SHADES = ["#6D8D74", "#C8A96B", "#537059", "#7E9A84", "#B89658", "#8AA690"];
+
+function hashToShade(str) {
+  let h = 0;
+  for (let i = 0; i < (str || "").length; i++) h = str.charCodeAt(i) + ((h << 5) - h);
+  return AVATAR_SHADES[Math.abs(h) % AVATAR_SHADES.length];
+}
+
+function initials(name) {
+  if (!name) return "?";
+  const parts = name.trim().split(/\s+/);
+  return (parts[0]?.[0] || "").concat(parts[1]?.[0] || "").toUpperCase() || name[0].toUpperCase();
+}
+
+function fileMeta(name) {
+  const ext = (name.split(".").pop() || "").toLowerCase();
+  const map = {
+    xlsx: { icon: "📊", label: "Excel" },
+    csv: { icon: "📈", label: "CSV" },
+    pdf: { icon: "📄", label: "PDF" },
+    docx: { icon: "📝", label: "Word" },
+    zip: { icon: "🗂️", label: "Archive" },
+    png: { icon: "🖼️", label: "Image" },
+    jpg: { icon: "🖼️", label: "Image" },
+    jpeg: { icon: "🖼️", label: "Image" },
+    webp: { icon: "🖼️", label: "Image" },
+  };
+  return map[ext] || { icon: "📁", label: ext.toUpperCase() || "File" };
+}
+
+function formatBytes(bytes) {
+  if (!bytes && bytes !== 0) return "";
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+}
+
+function formatTime(ts) {
+  try {
+    return new Date(ts).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  } catch {
+    return "";
+  }
+}
+
+function formatRelative(ts) {
+  try {
+    const diff = Date.now() - new Date(ts).getTime();
+    const min = Math.floor(diff / 60000);
+    if (min < 1) return "just now";
+    if (min < 60) return `${min}m ago`;
+    const hr = Math.floor(min / 60);
+    if (hr < 24) return `${hr}h ago`;
+    const day = Math.floor(hr / 24);
+    return `${day}d ago`;
+  } catch {
+    return "";
+  }
+}
+
+function genId(prefix) {
+  return `${prefix}-${Math.random().toString(36).slice(2, 8)}${Date.now().toString(36).slice(-4)}`;
+}
 
 // User-scoped storage helpers: each account has its own isolated recents & active workspace
 function getRecentsKey(username) {
@@ -447,7 +513,7 @@ export default function Workspace() {
       body: JSON.stringify({ token }),
     })
       .then((res) => (res.ok ? res.json() : Promise.reject()))
-      .then((data) => {
+      .then(async (data) => {
         if (data?.user?.username) {
           const realName = data.user.name;
           const realUsername = data.user.username.toLowerCase();
@@ -457,19 +523,27 @@ export default function Workspace() {
           setUserUsername(realUsername);
           setUserId(realUserId);
 
-          const userRecents = loadRecentsForUser(realUsername);
-          setRecents(userRecents);
+          let userRecents = loadRecentsForUser(realUsername);
 
-          // Push local named projects to server
-          for (const r of userRecents) {
-            if (r.id && r.name && !r.name.startsWith("Shared Project") && !r.name.startsWith("Project (") && !r.name.startsWith("New Chat")) {
-              fetch(`${API_BASE}/api/workspace`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ id: r.id, name: r.name, type: r.type || "project", created_by: realUserId })
-              }).catch(() => {});
+          // Fetch user workspaces from server
+          try {
+            const uRes = await fetch(`${API_BASE}/api/user/${encodeURIComponent(realUsername)}/workspaces`);
+            if (uRes.ok) {
+              const uData = await uRes.json();
+              if (Array.isArray(uData?.workspaces) && uData.workspaces.length > 0) {
+                const combined = [...uData.workspaces];
+                for (const lr of userRecents) {
+                  if (!combined.some((c) => c.id === lr.id)) {
+                    combined.push(lr);
+                  }
+                }
+                userRecents = combined;
+                saveRecentsForUser(realUsername, userRecents);
+              }
             }
-          }
+          } catch {}
+
+          setRecents(userRecents);
 
           // Auto-sync user's recent projects with actual names from server
           fetch(`${API_BASE}/api/workspaces`)
@@ -590,12 +664,20 @@ export default function Workspace() {
       setUserUsername(realUsername);
       setUserId(realUserId);
 
-      // BRAND NEW USER IS ALWAYS 100% CLEAN & BLANK
+      // BRAND NEW SIGNUP: STRICTLY 100% CLEAN, FRESH & BLANK
       setRecents([]);
       saveRecentsForUser(realUsername, []);
       localStorage.removeItem(getLastActiveKey(realUsername));
 
+      fetch(`${API_BASE}/api/user/${encodeURIComponent(realUsername)}/workspaces`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ workspaces: [] })
+      }).catch(() => {});
+
       setMessages([]);
+      setFiles([]);
+      setSelectedFile(null);
       setTeamThreads([]);
       setBranches([]);
 
@@ -641,11 +723,32 @@ export default function Workspace() {
       setUserUsername(realUsername);
       setUserId(realUserId);
 
-      // Load ONLY this user's recents
-      const userRecents = loadRecentsForUser(realUsername);
+      // Load user recents
+      let userRecents = loadRecentsForUser(realUsername);
+
+      // Fetch user workspaces from server
+      try {
+        const uRes = await fetch(`${API_BASE}/api/user/${encodeURIComponent(realUsername)}/workspaces`);
+        if (uRes.ok) {
+          const uData = await uRes.json();
+          if (Array.isArray(uData?.workspaces) && uData.workspaces.length > 0) {
+            const combined = [...uData.workspaces];
+            for (const lr of userRecents) {
+              if (!combined.some((c) => c.id === lr.id)) {
+                combined.push(lr);
+              }
+            }
+            userRecents = combined;
+            saveRecentsForUser(realUsername, userRecents);
+          }
+        }
+      } catch {}
+
       setRecents(userRecents);
 
       setMessages([]);
+      setFiles([]);
+      setSelectedFile(null);
       setTeamThreads([]);
       setBranches([]);
 
@@ -791,8 +894,12 @@ export default function Workspace() {
 
   // ---- Files panel ----
   const refreshFiles = useCallback(async () => {
+    if (!workspace?.id) {
+      setFiles([]);
+      return;
+    }
     try {
-      const res = await fetch(`${API_BASE}/api/files`);
+      const res = await fetch(`${API_BASE}/api/files?workspace_id=${encodeURIComponent(workspace.id)}`);
       const data = await res.json();
       const cleanFiles = (data.files || []).filter(
         (f) => f.name && !f.name.startsWith(".") && f.name.toLowerCase() !== ".gitkeep"
@@ -801,7 +908,7 @@ export default function Workspace() {
     } catch {
       // backend offline — leave files as-is
     }
-  }, []);
+  }, [workspace?.id]);
 
   useEffect(() => { if (workspace) refreshFiles(); }, [workspace, refreshFiles]);
 
@@ -811,6 +918,7 @@ export default function Workspace() {
     setSidebarOpen(false);
     setWorkspace(entry);
     setMessages([]);
+    setFiles([]);
     setSelectedFile(null);
     setReplyingTo(null);
     setActiveThread({ thread_id: `member-${userId}`, owner_id: userId, owner_name: userName, isBranch: false });
@@ -832,6 +940,11 @@ export default function Workspace() {
     ) {
       const next = upsertRecentForUser(userUsername, entry);
       setRecents(next);
+      fetch(`${API_BASE}/api/user/${encodeURIComponent(userUsername)}/workspace/add`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(entry),
+      }).catch(() => {});
     }
     setStep("active");
 
@@ -847,6 +960,11 @@ export default function Workspace() {
               setRecents((prev) => {
                 const updated = prev.map((r) => (r.id === entry.id ? { ...r, name: actualName } : r));
                 saveRecentsForUser(userUsername, updated);
+                fetch(`${API_BASE}/api/user/${encodeURIComponent(userUsername)}/workspace/add`, {
+                  method: "POST",
+                  headers: { "Content-Type": "application/json" },
+                  body: JSON.stringify({ ...entry, name: actualName }),
+                }).catch(() => {});
                 return updated;
               });
             }
@@ -989,6 +1107,11 @@ export default function Workspace() {
     setRecents(next);
     if (userUsername) {
       saveRecentsForUser(userUsername, next);
+      fetch(`${API_BASE}/api/user/${encodeURIComponent(userUsername)}/workspace/remove`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ id: chatId }),
+      }).catch(() => {});
     }
     if (workspace?.id === chatId) {
       if (next.length > 0) {
